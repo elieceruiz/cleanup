@@ -61,30 +61,25 @@ if "before_edges" not in st.session_state:
 if "ready" not in st.session_state:
     st.session_state.ready = False
 
-if "timer_running" not in st.session_state:
-    st.session_state.timer_running = False
-
 # === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
     img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
     if img_file_before:
         st.session_state.img_before = Image.open(img_file_before)
+        st.session_state.start_time = datetime.now(tz=CO)
         resized = resize_image(st.session_state.img_before)
         st.session_state.before_edges = simple_edge_score(resized)
         st.session_state.ready = True
-        img_b64_before = image_to_base64(resized)
 
+        img_b64_before = image_to_base64(resized)
         result = db_collection.insert_one({
             "session_active": True,
-            "start_time": datetime.now(tz=CO),
+            "start_time": st.session_state.start_time,
             "image_before": img_b64_before,
             "edges_before": st.session_state.before_edges,
         })
-
         st.session_state.session_id = result.inserted_id
-        st.session_state.start_time = datetime.now(tz=CO)
-        st.session_state.timer_running = True
         st.rerun()
 
 # === IF BEFORE EXISTS ===
@@ -92,13 +87,19 @@ if st.session_state.ready and st.session_state.img_before:
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
-    now = datetime.now(tz=CO)
+    placeholder = st.empty()
+
     if st.session_state.start_time:
-        elapsed = now - st.session_state.start_time
+        start_time = st.session_state.start_time
+        if start_time.tzinfo is None:
+            start_time = CO.localize(start_time)
+
+        now = datetime.now(tz=CO)
+        elapsed = now - start_time
         minutes, seconds = divmod(elapsed.total_seconds(), 60)
-        st.markdown(f"### ⏱️ Tiempo activo: **{int(minutes)} min {int(seconds)} sec**")
+        placeholder.markdown(f"### ⏱️ Tiempo activo: **{int(minutes)} min {int(seconds)} sec**")
     else:
-        st.info("Presiona '🟢 Iniciar Cronómetro' para comenzar.")
+        placeholder.markdown("### ⏱️ Tiempo activo: --")
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
@@ -108,7 +109,7 @@ if st.session_state.ready and st.session_state.img_before:
         resized_after = resize_image(img_after)
         after_edges = simple_edge_score(resized_after)
 
-        duration = int((datetime.now(tz=CO) - st.session_state.start_time).total_seconds())
+        duration = int((datetime.now(tz=CO) - start_time).total_seconds())
         improved = after_edges < (st.session_state.before_edges * 0.9)
 
         img_b64_after = image_to_base64(resized_after)
@@ -139,7 +140,6 @@ if st.session_state.ready and st.session_state.img_before:
             st.session_state.img_before = None
             st.session_state.before_edges = 0
             st.session_state.ready = False
-            st.session_state.timer_running = False
             st.rerun()
 
 # === HISTORY ===
