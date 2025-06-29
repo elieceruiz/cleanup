@@ -61,7 +61,7 @@ if st.session_state.start_time is None:
         st.session_state.start_time = datetime.now(CO)
         st.success("📸 BEFORE photo uploaded. Timer started. Now tidy up!")
         st.image(img_before, caption="BEFORE", width=300)
-        st.experimental_rerun()
+        st.rerun()
 
 # --- STEP 2: While timer is running ---
 elapsed = None
@@ -76,7 +76,7 @@ if st.session_state.start_time:
         after_file = st.file_uploader("Now upload your AFTER photo", type=["jpg", "png", "jpeg"], key="after")
         if after_file:
             st.session_state.img_after = Image.open(after_file)
-            st.experimental_rerun()
+            st.rerun()
 
     elif st.session_state.img_after is not None:
         after_edges = count_edges(st.session_state.img_after)
@@ -111,7 +111,7 @@ if st.session_state.start_time:
         st.session_state.before_edges = None
         st.session_state.img_before = None
         st.session_state.img_after = None
-        st.experimental_rerun()
+        st.rerun()
 
 # --- HISTORY ---
 st.divider()
