@@ -7,6 +7,7 @@ from pytz import timezone
 import time
 import base64
 import io
+from streamlit_autorefresh import st_autorefresh
 
 # --- CONFIGURATION ---
 MONGO_URI = st.secrets["mongo_uri"]
@@ -44,6 +45,10 @@ if "before_edges" not in st.session_state:
 if "img_before" not in st.session_state:
     st.session_state.img_before = None
 
+# --- AUTOREFRESH TIMER IF RUNNING ---
+if st.session_state.start_time:
+    st_autorefresh(interval=1000, key="refresh")
+
 # --- STEP 1: Upload BEFORE photo ---
 if st.session_state.start_time is None:
     before_file = st.file_uploader("Upload your BEFORE photo", type=["jpg", "png", "jpeg"])
@@ -54,7 +59,7 @@ if st.session_state.start_time is None:
         st.session_state.start_time = datetime.now(CO)
         st.success("📸 BEFORE photo uploaded. Timer started. Now tidy up!")
         st.image(img_before, caption="BEFORE", width=300)
-        st.rerun()
+        st.experimental_rerun()
 
 # --- STEP 2: While timer is running ---
 elapsed = None
@@ -98,7 +103,7 @@ if st.session_state.start_time:
         st.session_state.start_time = None
         st.session_state.before_edges = None
         st.session_state.img_before = None
-        st.rerun()
+        st.experimental_rerun()
 
 # --- HISTORY ---
 st.divider()
