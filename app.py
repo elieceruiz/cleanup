@@ -11,7 +11,12 @@ MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
 db = client.cleanup
 collection = db.entries
+meta = db.meta
 zona_col = pytz.timezone("America/Bogota")
+
+# === INIT STATE ===
+if "last_check" not in st.session_state:
+    st.session_state.last_check = datetime.now()
 
 # === UTILS ===
 def resize_image(img, max_width=300):
@@ -45,6 +50,14 @@ with tab1:
     st.title("🧹 Cleanup Visual Tracker")
 
     last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
+    historial = collection.count_documents({"session_active": False, "image_after": {"$exists": True}})
+    meta_doc = meta.find_one({}) or {}
+    last_reset = meta_doc.get("last_reset", datetime(2000, 1, 1))
+    last_check = st.session_state.get("last_check", datetime(2000, 1, 1))
+
+    if not last and historial == 0 and last_reset > last_check:
+        st.session_state.last_check = datetime.now()
+        st.rerun()
 
     if last:
         st_autorefresh(interval=1000, key="refresh_crono")
@@ -205,5 +218,6 @@ with tab2:
     with st.expander("🧨 Herramientas de desarrollo"):
         if st.button("🗑️ Borrar todos los registros (MongoDB)"):
             collection.delete_many({})
+            meta.update_one({}, {"$set": {"last_reset": datetime.now()}}, upsert=True)
             st.success("✅ Todos los registros han sido eliminados.")
             st.rerun()
