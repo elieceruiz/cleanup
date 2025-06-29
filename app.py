@@ -36,7 +36,7 @@ def base64_to_image(b64_str: str) -> Image.Image:
         img = Image.open(io.BytesIO(base64.b64decode(b64_str)))
         return img.convert("RGB")
     except Exception as e:
-        st.warning(f"⚠️ Error cargando imagen: {e}")
+        st.warning(f"⚠️ Error cargando imagen: {e} (base64 size: {len(b64_str)})")
         return Image.new("RGB", (300, 200), color="gray")
 
 def simple_edge_score(img: Image.Image) -> int:
@@ -115,9 +115,11 @@ with tabs[0]:
 
     # === SESIÓN ACTIVA ===
     if last and last.get("session_active"):
-        # Hidratar estado local si está vacío
-        if not st.session_state.img_before and last.get("image_base64"):
-            st.session_state.img_before = base64_to_image(last["image_base64"])
+        # Hidratar estado local siempre que cambie la sesión activa (comparando session_id)
+        mongo_session_id = str(last["_id"])
+        local_session_id = str(st.session_state.session_id) if st.session_state.session_id else None
+        if mongo_session_id != local_session_id:
+            st.session_state.img_before = base64_to_image(last.get("image_base64", ""))
             st.session_state.before_edges = last.get("edges", 0)
             st.session_state.start_time = last.get("start_time").astimezone(CO)
             st.session_state.ready = True
