@@ -3,69 +3,68 @@ from PIL import Image, ImageFilter
 import numpy as np
 from datetime import datetime
 from pymongo import MongoClient
-import io
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURATION ---
 MONGO_URI = st.secrets["mongo_uri"]
 client = MongoClient(MONGO_URI)
-db = client["ordenador_visual"]
-coleccion = db["registros"]
+db = client["visual_cleanup"]
+collection = db["records"]
 
-# --- DETECCIÓN DE BORDES SIN OPENCV ---
-def contar_bordes(img: Image.Image) -> int:
-    gris = img.convert("L")  # Escala de grises
-    bordes = gris.filter(ImageFilter.FIND_EDGES)
-    np_bordes = np.array(bordes)
-    cantidad = np.sum(np_bordes > 50)  # Umbral básico
-    return cantidad
+# --- EDGE DETECTION WITHOUT OPENCV ---
+def count_edges(img: Image.Image) -> int:
+    gray = img.convert("L")  # Grayscale
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_array = np.array(edges)
+    count = np.sum(edge_array > 50)  # Basic threshold
+    return count
 
-# --- INTERFAZ STREAMLIT ---
-st.set_page_config("Ordenador Visual", layout="centered")
-st.title("🧹 Ordenador Visual")
+# --- STREAMLIT UI ---
+st.set_page_config("Visual Cleanup", layout="centered")
+st.title("🧹 Visual Cleanup")
 
-st.markdown("Sube una imagen del **ANTES** y otra del **DESPUÉS** para evaluar el cambio y registrar el esfuerzo.")
+st.markdown("Upload a **BEFORE** and **AFTER** image to evaluate changes and log your effort.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    antes_file = st.file_uploader("Foto ANTES", type=["jpg", "png", "jpeg"], key="antes")
+    before_file = st.file_uploader("BEFORE Photo", type=["jpg", "png", "jpeg"], key="before")
 with col2:
-    despues_file = st.file_uploader("Foto DESPUÉS", type=["jpg", "png", "jpeg"], key="despues")
+    after_file = st.file_uploader("AFTER Photo", type=["jpg", "png", "jpeg"], key="after")
 
-if antes_file and despues_file:
-    img_antes = Image.open(antes_file)
-    img_despues = Image.open(despues_file)
+if before_file and after_file:
+    img_before = Image.open(before_file)
+    img_after = Image.open(after_file)
 
-    conteo_antes = contar_bordes(img_antes)
-    conteo_despues = contar_bordes(img_despues)
+    edges_before = count_edges(img_before)
+    edges_after = count_edges(img_after)
 
-    st.subheader("Resultado")
-    mejora = conteo_despues < conteo_antes
-    st.write(f"Pixeles con bordes (ANTES): {conteo_antes:,}")
-    st.write(f"Pixeles con bordes (DESPUÉS): {conteo_despues:,}")
+    st.subheader("Result")
+    improved = edges_after < edges_before
+    st.write(f"Edge pixels (BEFORE): {edges_before:,}")
+    st.write(f"Edge pixels (AFTER): {edges_after:,}")
 
-    if mejora:
-        duracion = st.number_input("¿Cuántos minutos tardaste?", min_value=1, max_value=240, step=1)
-        if st.button("Guardar registro"):
-            coleccion.insert_one({
+    if improved:
+        duration = st.number_input("How many minutes did it take?", min_value=1, max_value=240, step=1)
+        if st.button("Save record"):
+            collection.insert_one({
                 "timestamp": datetime.now(),
-                "bordes_antes": int(conteo_antes),
-                "bordes_despues": int(conteo_despues),
-                "mejora": True,
-                "minutos": duracion
+                "edges_before": int(edges_before),
+                "edges_after": int(edges_after),
+                "improved": True,
+                "minutes": duration
             })
-            st.success("✅ Registro guardado en MongoDB")
+            st.success("✅ Record saved to MongoDB")
     else:
-        st.warning("No se detecta mejora visual. Intenta otra vez o revisa las fotos.")
+        st.warning("No visual improvement detected. Try again or check your photos.")
 
-    st.image([img_antes, img_despues], caption=["ANTES", "DESPUÉS"], width=300)
+    st.image([img_before, img_after], caption=["BEFORE", "AFTER"], width=300)
 
-# Mostrar historial
+# History display
 st.divider()
-st.subheader("📜 Historial de acciones")
-registros = list(coleccion.find().sort("timestamp", -1).limit(10))
-if registros:
-    for r in registros:
-        st.write(f"🕒 {r['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} — {r['minutos']} min — Mejora: {'✅' if r['mejora'] else '❌'}")
+st.subheader("📜 Action History")
+records = list(collection.find().sort("timestamp", -1).limit(10))
+if records:
+    for r in records:
+        st.write(f"🕒 {r['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} — {r['minutes']} min — Improved: {'✅' if r['improved'] else '❌'}")
 else:
-    st.info("Aún no hay registros.")
+    st.info("No records yet.")
