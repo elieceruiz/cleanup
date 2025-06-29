@@ -97,21 +97,21 @@ with tabs[0]:
                 st.image(base64_to_image(latest.get("image_after", "")), caption="DESPUÉS", width=250)
                 st.markdown(f"Edges: {latest.get('edges_after', 0):,}")
         if st.button("🔁 Iniciar nueva sesión"):
-    # Limpiar estado local
-    st.session_state.clear()
+            # Limpiar estado local
+            st.session_state.clear()
 
-    # Marcar sesiones anteriores como inactivas (por si alguna quedó viva)
-    collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
+            # Marcar sesiones anteriores como inactivas (por si alguna quedó viva)
+            collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
 
-    # Actualizar 'meta' para forzar sincronización
-    meta.update_one(
-        {},
-        {"$set": {"last_session_start": datetime.now(timezone.utc)}},
-        upsert=True
-    )
+            # Actualizar 'meta' para forzar sincronización
+            meta.update_one(
+                {},
+                {"$set": {"last_session_start": datetime.now(timezone.utc)}},
+                upsert=True
+            )
 
-    # Recargar la App para reflejar el reinicio
-    st.rerun()
+            # Recargar la App para reflejar el reinicio
+            st.rerun()
 
     # === SESIÓN ACTIVA ===
     if not st.session_state.img_before:
