@@ -2,8 +2,9 @@ import streamlit as st
 import pymongo
 from PIL import Image
 import io, base64
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pytz
+import time
 from streamlit_autorefresh import st_autorefresh
 import getpass
 from bson import ObjectId
@@ -57,11 +58,6 @@ if "user_login" not in st.session_state:
 meta_doc = meta.find_one({}) or {}
 last = collection.find_one(sort=[("start_time", -1)])
 
-if not last or not last.get("session_active"):
-    st_autorefresh(interval=4000, key="sincronizador_idle")
-else:
-    st_autorefresh(interval=1000, key="sincronizador_global")
-
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 
 with tabs[0]:
@@ -98,7 +94,7 @@ with tabs[0]:
             st.rerun()
         st.stop()
 
-    # SESIÓN ACTIVA
+    # SESIÓN ACTIVA - CRONÓMETRO EN VIVO
     session_id = last["_id"]
     img_before = base64_to_image(last.get("image_base64", ""))
     before_edges = last.get("edges", 0)
@@ -106,42 +102,50 @@ with tabs[0]:
     st.success("Sesión activa. Cuando termines, detén el cronómetro.")
     st.image(img_before, caption="ANTES", width=320)
     st.markdown(f"**Saturación visual antes:** `{before_edges:,}`")
-    elapsed = datetime.now(CO) - start_time
-    st.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed.total_seconds()))}</code>", unsafe_allow_html=True)
-    st.divider()
 
-    # BOTÓN DE PARAR CON DEPURACIÓN
-    if last.get("session_active"):
-        if st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True):
-            with st.spinner("Finalizando sesión y sincronizando..."):
-                end_time = datetime.now(timezone.utc)
-                duration = int((end_time - last["start_time"].replace(tzinfo=None)).total_seconds())
-                st.info(f"Intentando actualizar session_id: {last['_id']} (tipo: {type(last['_id'])})")
-                result = collection.update_one(
-                    {"_id": last["_id"], "session_active": True},
-                    {"$set": {
-                        "session_active": False,
-                        "end_time": end_time,
-                        "duration_seconds": duration,
-                        "improved": None
-                    }}
-                )
-                st.info(f"update_one result: matched={result.matched_count}, modified={result.modified_count}")
-                meta.update_one(
-                    {}, {"$set": {
-                        "ultimo_pellizco": {
-                            "user": st.session_state.user_login,
-                            "datetime": end_time,
-                            "mensaje": "Sesión finalizada, esperando DESPUÉS"
-                        }
-                    }}, upsert=True
-                )
-                if result.modified_count == 1:
-                    st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
-                    st.rerun()
-                else:
-                    st.error(f"No se pudo finalizar la sesión. session_active sigue en True. session_id: {last['_id']}")
-                    st.stop()
+    cronometro = st.empty()
+    stop_button = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
+
+    # Loop de cronómetro "real", consulta el estado en la base cada ciclo
+    while True:
+        doc = collection.find_one({"_id": session_id})
+        if not doc or not doc.get("session_active", False):
+            st.success("¡Sesión finalizada desde otro dispositivo o ventana!")
+            st.rerun()
+            break
+        start_time = doc["start_time"].astimezone(CO)
+        elapsed = (datetime.now(CO) - start_time).total_seconds()
+        cronometro.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed))}</code>", unsafe_allow_html=True)
+        time.sleep(1)
+        if stop_button:
+            end_time = datetime.now(timezone.utc)
+            duration = int((end_time - doc["start_time"].replace(tzinfo=None)).total_seconds())
+            result = collection.update_one(
+                {"_id": doc["_id"], "session_active": True},
+                {"$set": {
+                    "session_active": False,
+                    "end_time": end_time,
+                    "duration_seconds": duration,
+                    "improved": None
+                }}
+            )
+            meta.update_one(
+                {}, {"$set": {
+                    "ultimo_pellizco": {
+                        "user": st.session_state.user_login,
+                        "datetime": end_time,
+                        "mensaje": "Sesión finalizada, esperando DESPUÉS"
+                    }
+                }}, upsert=True
+            )
+            nuevo = collection.find_one({"_id": doc["_id"]})
+            if result.modified_count == 1 and nuevo.get("session_active") is False:
+                st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
+                st.rerun()
+            else:
+                st.error(f"No se pudo finalizar la sesión. session_active en la base: {nuevo.get('session_active')}. session_id: {doc['_id']}")
+                st.stop()
+            break
 
     # SUBIDA DEL DESPUÉS
     last = collection.find_one(sort=[("start_time", -1)])
