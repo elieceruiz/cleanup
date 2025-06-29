@@ -39,21 +39,15 @@ def simple_edge_score(img: Image.Image) -> int:
     diffs = [abs(pixels[i] - pixels[i+1]) for i in range(len(pixels)-1)]
     return sum(d > 10 for d in diffs)
 
-# ==== INTERFAZ ====
-st.set_page_config(page_title="🧪 Test Mongo Persistente", layout="centered")
-st.title("🧪 Test Subida + Cronómetro persistente")
+# ==== INICIALIZACIÓN DE ESTADO ====
+st.set_page_config(page_title="🧪 Cleanup Test", layout="centered")
+st.title("🧹 Cleanup Test con Edge Score")
 
-# ==== RECUPERACIÓN DE SESIÓN SI EXISTE ====
-if "start_time" not in st.session_state:
-    st.session_state.start_time = None
-if "image" not in st.session_state:
-    st.session_state.image = None
-if "edges" not in st.session_state:
-    st.session_state.edges = None
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
+for k in ["start_time", "image", "edges", "session_id", "after_uploaded"]:
+    if k not in st.session_state:
+        st.session_state[k] = None
 
-# Si no hay imagen ni tiempo, intentar recuperar desde Mongo
+# ==== RECUPERAR SESIÓN ACTIVA SI EXISTE ====
 if st.session_state.start_time is None or st.session_state.image is None:
     last_active = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
     if last_active:
@@ -62,48 +56,63 @@ if st.session_state.start_time is None or st.session_state.image is None:
             st.session_state.image = base64_to_image(last_active["image_base64"])
             st.session_state.edges = last_active["edges"]
             st.session_state.session_id = last_active["_id"]
-            st.info("ℹ️ Sesión recuperada desde MongoDB.")
         except Exception as e:
-            st.error(f"❌ Error recuperando sesión: {e}")
+            st.warning(f"No se pudo restaurar la sesión: {e}")
 
-# ==== SI YA HAY SESIÓN ====
+# ==== MOSTRAR SESIÓN ACTIVA ====
 if st.session_state.image:
-    st.image(st.session_state.image, caption="Imagen subida", width=300)
-    st.markdown(f"**Edges:** `{st.session_state.edges}`")
+    st.image(st.session_state.image, caption="🖼️ Imagen ANTES", width=300)
+    st.markdown(f"**Edges ANTES:** `{st.session_state.edges}`")
 
     now = datetime.now(zona_col)
     elapsed = now - st.session_state.start_time
     minutes, seconds = divmod(elapsed.total_seconds(), 60)
     st.markdown(f"### ⏱️ Tiempo activo: **{int(minutes)} min {int(seconds)} sec**")
 
-    if st.button("🛑 Finalizar sesión"):
+    # ==== SUBIR IMAGEN DESPUÉS ====
+    st.subheader("📸 Sube la imagen DESPUÉS")
+    img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+
+    if img_file_after and st.button("🟣 Finalizar y comparar"):
         try:
-            end_time = datetime.now(zona_col)
-            duration = int((end_time - st.session_state.start_time).total_seconds())
+            img_after = Image.open(img_file_after)
+            resized_after = resize_image(img_after)
+            score_after = simple_edge_score(resized_after)
+            img_b64_after = image_to_base64(resized_after)
+
+            duration = int((datetime.now(zona_col) - st.session_state.start_time).total_seconds())
+            improved = score_after < st.session_state.edges
 
             collection.update_one(
                 {"_id": st.session_state.session_id},
                 {"$set": {
                     "session_active": False,
-                    "end_time": end_time,
-                    "duration_seconds": duration
+                    "end_time": datetime.now(zona_col),
+                    "duration_seconds": duration,
+                    "image_after": img_b64_after,
+                    "edges_after": score_after,
+                    "improved": improved
                 }}
             )
 
-            st.success(f"✅ Sesión finalizada ({duration} segundos).")
+            st.image(resized_after, caption="🖼️ Imagen DESPUÉS", width=300)
+            st.markdown(f"**Edges DESPUÉS:** `{score_after}`")
 
-            # Limpiar estado
-            st.session_state.start_time = None
-            st.session_state.image = None
-            st.session_state.edges = None
-            st.session_state.session_id = None
+            if improved:
+                st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
+            else:
+                st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
+
+            # Reset sesión local
+            for k in ["start_time", "image", "edges", "session_id"]:
+                st.session_state[k] = None
         except Exception as e:
-            st.error(f"❌ Error al finalizar sesión: {e}")
+            st.error(f"❌ Error procesando la imagen después: {e}")
 
-# ==== SI NO HAY NINGUNA SESIÓN, PERMITIR NUEVA ====
-elif not st.session_state.image:
-    img_file = st.file_uploader("Sube una imagen", type=["jpg", "jpeg", "png"])
-
+# ==== SI NO HAY SESIÓN ACTIVA: PERMITIR NUEVA ====
+else:
+    st.subheader("📤 Sube una imagen inicial")
+    img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
     if img_file and st.button("🟢 Iniciar sesión"):
         try:
             image_raw = Image.open(img_file)
@@ -125,6 +134,6 @@ elif not st.session_state.image:
             st.session_state.edges = score
             st.session_state.session_id = result.inserted_id
 
-            st.success("✅ Imagen subida y sesión iniciada.")
+            st.success("✅ Imagen inicial guardada. Cronómetro iniciado.")
         except Exception as e:
-            st.error(f"❌ Error al subir: {e}")
+            st.error(f"❌ No se pudo subir la imagen inicial: {e}")
