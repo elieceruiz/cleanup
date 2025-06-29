@@ -6,9 +6,6 @@ from datetime import datetime
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
-# === AUTOREFRESH ===
-st_autorefresh(interval=1000, key="refresh")
-
 # === CONFIG ===
 MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
@@ -50,6 +47,8 @@ with tab1:
     last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
 
     if last:
+        st_autorefresh(interval=1000, key="refresh_crono")
+
         try:
             start_time = last["start_time"].replace(tzinfo=pytz.utc).astimezone(zona_col)
             image_before = base64_to_image(last["image_base64"])
