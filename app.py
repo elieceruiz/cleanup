@@ -114,66 +114,75 @@ with tabs[0]:
             st.rerun()
 
     # === SESIÓN ACTIVA ===
-    if not st.session_state.img_before:
-        st.subheader("Subí la imagen del ANTES")
-        img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"], key="before")
-        if img_file and st.button("🟢 Iniciar sesión"):
-            img = Image.open(img_file)
-            resized = resize_image(img)
-            img_b64 = image_to_base64(resized)
-            edges = simple_edge_score(resized)
-
-            st.session_state.img_before = resized
-            st.session_state.before_edges = edges
-            st.session_state.start_time = datetime.now(CO)
+    if last and last.get("session_active"):
+        # Hidratar estado local si está vacío
+        if not st.session_state.img_before and last.get("image_base64"):
+            st.session_state.img_before = base64_to_image(last["image_base64"])
+            st.session_state.before_edges = last.get("edges", 0)
+            st.session_state.start_time = last.get("start_time").astimezone(CO)
             st.session_state.ready = True
+            st.session_state.session_id = last["_id"]
 
-            result = collection.insert_one({
-                "session_active": True,
-                "start_time": datetime.now(timezone.utc),
-                "image_base64": img_b64,
-                "edges": edges,
-            })
-            st.session_state.session_id = result.inserted_id
-            meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
-            st.rerun()
+        if not st.session_state.img_before:
+            st.subheader("Subí la imagen del ANTES")
+            img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"], key="before")
+            if img_file and st.button("🟢 Iniciar sesión"):
+                img = Image.open(img_file)
+                resized = resize_image(img)
+                img_b64 = image_to_base64(resized)
+                edges = simple_edge_score(resized)
 
-    if st.session_state.img_before:
-        st.image(st.session_state.img_before, caption="ANTES", width=300)
-        st.markdown(f"Edges: {st.session_state.before_edges:,}")
-        now = datetime.now(CO)
-        elapsed = now - st.session_state.start_time
-        st.markdown(f"⏱️ Tiempo activo: {int(elapsed.total_seconds())} seg")
+                st.session_state.img_before = resized
+                st.session_state.before_edges = edges
+                st.session_state.start_time = datetime.now(CO)
+                st.session_state.ready = True
 
-        st.subheader("Subí la imagen del DESPUÉS")
-        img_after_file = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+                result = collection.insert_one({
+                    "session_active": True,
+                    "start_time": datetime.now(timezone.utc),
+                    "image_base64": img_b64,
+                    "edges": edges,
+                })
+                st.session_state.session_id = result.inserted_id
+                meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
+                st.rerun()
 
-        if img_after_file and st.button("✅ Finalizar y comparar"):
-            img_after = Image.open(img_after_file)
-            resized_after = resize_image(img_after)
-            img_b64_after = image_to_base64(resized_after)
-            edges_after = simple_edge_score(resized_after)
-            improved = edges_after < st.session_state.before_edges * 0.9
-            end_time = datetime.now(timezone.utc)
-            duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+        if st.session_state.img_before:
+            st.image(st.session_state.img_before, caption="ANTES", width=300)
+            st.markdown(f"Edges: {st.session_state.before_edges:,}")
+            now = datetime.now(CO)
+            elapsed = now - st.session_state.start_time
+            st.markdown(f"⏱️ Tiempo activo: {int(elapsed.total_seconds())} seg")
 
-            collection.update_one(
-                {"_id": st.session_state.session_id},
-                {"$set": {
-                    "session_active": False,
-                    "end_time": end_time,
-                    "image_after": img_b64_after,
-                    "edges_after": edges_after,
-                    "improved": improved,
-                    "duration_seconds": duration,
-                }}
-            )
-            st.success("🧹 Sesión registrada exitosamente.")
-            st.session_state.img_before = None
-            st.session_state.ready = False
-            st.session_state.start_time = None
-            st.session_state.before_edges = 0
-            st.rerun()
+            st.subheader("Subí la imagen del DESPUÉS")
+            img_after_file = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+
+            if img_after_file and st.button("✅ Finalizar y comparar"):
+                img_after = Image.open(img_after_file)
+                resized_after = resize_image(img_after)
+                img_b64_after = image_to_base64(resized_after)
+                edges_after = simple_edge_score(resized_after)
+                improved = edges_after < st.session_state.before_edges * 0.9
+                end_time = datetime.now(timezone.utc)
+                duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+
+                collection.update_one(
+                    {"_id": st.session_state.session_id},
+                    {"$set": {
+                        "session_active": False,
+                        "end_time": end_time,
+                        "image_after": img_b64_after,
+                        "edges_after": edges_after,
+                        "improved": improved,
+                        "duration_seconds": duration,
+                    }}
+                )
+                st.success("🧹 Sesión registrada exitosamente.")
+                st.session_state.img_before = None
+                st.session_state.ready = False
+                st.session_state.start_time = None
+                st.session_state.before_edges = 0
+                st.rerun()
 
 with tabs[1]:
     st.title("📜 Historial")
