@@ -2,11 +2,10 @@ import streamlit as st
 import pymongo
 from PIL import Image
 import io, base64
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import pytz
 import time
 import getpass
-from bson import ObjectId
 
 # === CONFIG ===
 st.set_page_config(page_title="🧹 Visualizador de Limpieza", layout="centered")
@@ -51,118 +50,73 @@ def format_seconds(seconds):
 if "user_login" not in st.session_state:
     st.session_state.user_login = getpass.getuser()
 
-# === SYNC ===
-meta_doc = meta.find_one({}) or {}
-last = collection.find_one(sort=[("start_time", -1)])
-
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 
 with tabs[0]:
     st.markdown("<h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>", unsafe_allow_html=True)
     st.divider()
 
-    # AUTOSYNC: Si detecta nueva sesión activa, forzar rerun para todos
-    last_check = collection.find_one(sort=[("start_time", -1)])
-    if (not last or not last.get("session_active")) and last_check and last_check.get("session_active"):
-        st.experimental_rerun()
+    # --- Consulta el estado real en Mongo cada vez ---
+    last = collection.find_one(sort=[("start_time", -1)])
 
-    # INICIO: NO ACTIVA
-    if not last or not last.get("session_active"):
-        st.info("No hay sesión activa. Sube una foto de ANTES para iniciar.")
-        img_file = st.file_uploader("ANTES", type=["jpg", "jpeg", "png"], key="before_new")
-        if img_file:
-            img = Image.open(img_file)
-            resized = resize_image(img)
-            img_b64 = image_to_base64(resized)
-            edges = simple_edge_score(resized)
-            now_utc = datetime.now(timezone.utc)
-            collection.insert_one({
-                "session_active": True,
-                "start_time": now_utc,
-                "image_base64": img_b64,
-                "edges": edges,
-            })
-            meta.update_one(
-                {}, {"$set": {
-                    "last_session_start": now_utc,
-                    "ultimo_pellizco": {
-                        "user": st.session_state.user_login,
-                        "datetime": now_utc,
-                        "mensaje": "Se subió el ANTES"
-                    }
-                }}, upsert=True
-            )
-            st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro.")
-            st.rerun()
-        st.stop()
+    # --- Si hay sesión activa, muéstrala ---
+    if last and last.get("session_active"):
+        session_id = last["_id"]
+        img_before = base64_to_image(last.get("image_base64", ""))
+        before_edges = last.get("edges", 0)
+        st.success("Sesión activa. Cuando termines, detén el cronómetro.")
+        st.image(img_before, caption="ANTES", width=320)
+        st.markdown(f"**Saturación visual antes:** `{before_edges:,}`")
+        cronometro = st.empty()
+        stop_button = st.empty()
+        stop_pressed = False
 
-    # SESIÓN ACTIVA - CRONÓMETRO EN VIVO
-    session_id = last["_id"]
-    img_before = base64_to_image(last.get("image_base64", ""))
-    before_edges = last.get("edges", 0)
-    st.success("Sesión activa. Cuando termines, detén el cronómetro.")
-    st.image(img_before, caption="ANTES", width=320)
-    st.markdown(f"**Saturación visual antes:** `{before_edges:,}`")
+        with stop_button:
+            stop_pressed = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
 
-    # --- Cronómetro en vivo (loop con consulta real a MongoDB) ---
-    cronometro = st.empty()
-    stop_button = st.empty()
-    stop_pressed = False
-
-    # Botón de detener cronómetro
-    with stop_button:
-        stop_pressed = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
-
-    while True:
-        # Consulta el estado real en la base
-        doc = collection.find_one({"_id": session_id})
-        if not doc or not doc.get("session_active", False):
-            st.success("¡Sesión finalizada desde otro dispositivo o ventana!")
-            st.rerun()
-            break
-        start_time = doc["start_time"].astimezone(CO)
-        elapsed = (datetime.now(CO) - start_time).total_seconds()
-        cronometro.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed))}</code>", unsafe_allow_html=True)
-        time.sleep(1)
-        # Si el botón fue presionado, cerrar la sesión
-        if stop_pressed:
-            end_time = datetime.now(timezone.utc)
-            start_time_db = doc["start_time"]
-            if start_time_db.tzinfo is None:
-                start_time_db = start_time_db.replace(tzinfo=timezone.utc)
-            else:
-                start_time_db = start_time_db.astimezone(timezone.utc)
-            duration = int((end_time - start_time_db).total_seconds())
-            result = collection.update_one(
-                {"_id": doc["_id"], "session_active": True},
-                {"$set": {
-                    "session_active": False,
-                    "end_time": end_time,
-                    "duration_seconds": duration,
-                    "improved": None
-                }}
-            )
-            meta.update_one(
-                {}, {"$set": {
-                    "ultimo_pellizco": {
-                        "user": st.session_state.user_login,
-                        "datetime": end_time,
-                        "mensaje": "Sesión finalizada, esperando DESPUÉS"
-                    }
-                }}, upsert=True
-            )
-            nuevo = collection.find_one({"_id": doc["_id"]})
-            if result.modified_count == 1 and nuevo.get("session_active") is False:
+        # Cronómetro en vivo (sin bloquear el frontend)
+        start_time = last["start_time"]
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+        else:
+            start_time = start_time.astimezone(timezone.utc)
+        while True:
+            doc = collection.find_one({"_id": session_id})
+            if not doc or not doc.get("session_active", False):
+                st.success("¡Sesión finalizada desde otro dispositivo o ventana!")
+                st.rerun()
+                break
+            start_time_co = start_time.astimezone(CO)
+            elapsed = (datetime.now(CO) - start_time_co).total_seconds()
+            cronometro.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed))}</code>", unsafe_allow_html=True)
+            time.sleep(1)
+            if stop_pressed:
+                end_time = datetime.now(timezone.utc)
+                duration = int((end_time - start_time).total_seconds())
+                collection.update_one(
+                    {"_id": doc["_id"], "session_active": True},
+                    {"$set": {
+                        "session_active": False,
+                        "end_time": end_time,
+                        "duration_seconds": duration,
+                        "improved": None
+                    }}
+                )
+                meta.update_one(
+                    {}, {"$set": {
+                        "ultimo_pellizco": {
+                            "user": st.session_state.user_login,
+                            "datetime": end_time,
+                            "mensaje": "Sesión finalizada, esperando DESPUÉS"
+                        }
+                    }}, upsert=True
+                )
                 st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
                 st.rerun()
-            else:
-                st.error(f"No se pudo finalizar la sesión. session_active en la base: {nuevo.get('session_active')}. session_id: {doc['_id']}")
-                st.stop()
-            break
+                break
 
-    # SUBIDA DEL DESPUÉS
-    last = collection.find_one(sort=[("start_time", -1)])
-    if last and not last.get("session_active") and last.get("image_after", None) is None:
+    # --- Si no hay sesión activa, pero existe una sesión finalizada sin imagen después, mostrar uploader ---
+    elif last and not last.get("session_active") and not last.get("image_after"):
         st.warning("Sesión finalizada. Sube la foto del DESPUÉS para completar el registro.")
         st.image(base64_to_image(last.get("image_base64", "")), caption="ANTES (guardado)", width=320)
         img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
@@ -202,8 +156,38 @@ with tabs[0]:
                     st.text(traceback.format_exc())
         st.info("Cuando subas la foto del después, se completará la sesión en el historial.")
 
-    elif last and not last.get("session_active") and last.get("image_after", None) is not None:
-        st.success("Sesión completada. Puedes ver el resultado en el historial.")
+    # --- Si no hay sesión activa ni pendiente, o ya tiene después, permite iniciar nueva ---
+    else:
+        # Autoreload si otro usuario inicia sesión en paralelo
+        last_check = collection.find_one(sort=[("start_time", -1)])
+        if (not last or not last.get("session_active")) and last_check and last_check.get("session_active"):
+            st.rerun()
+        st.info("No hay sesión activa. Sube una foto de ANTES para iniciar.")
+        img_file = st.file_uploader("ANTES", type=["jpg", "jpeg", "png"], key="before_new")
+        if img_file:
+            img = Image.open(img_file)
+            resized = resize_image(img)
+            img_b64 = image_to_base64(resized)
+            edges = simple_edge_score(resized)
+            now_utc = datetime.now(timezone.utc)
+            collection.insert_one({
+                "session_active": True,
+                "start_time": now_utc,
+                "image_base64": img_b64,
+                "edges": edges,
+            })
+            meta.update_one(
+                {}, {"$set": {
+                    "last_session_start": now_utc,
+                    "ultimo_pellizco": {
+                        "user": st.session_state.user_login,
+                        "datetime": now_utc,
+                        "mensaje": "Se subió el ANTES"
+                    }
+                }}, upsert=True
+            )
+            st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro.")
+            st.rerun()
 
 with tabs[1]:
     st.markdown("<h2 style='color:#2b7a78;'>🗂️ Historial de Sesiones</h2>", unsafe_allow_html=True)
