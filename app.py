@@ -1,7 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageFilter
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from pymongo import MongoClient
 from pytz import timezone
 import time
@@ -22,6 +22,14 @@ def count_edges(img: Image.Image) -> int:
     edges = gray.filter(ImageFilter.FIND_EDGES)
     edge_array = np.array(edges)
     return int(np.sum(edge_array > 50))
+
+# --- RESIZE IMAGE ---
+def resize_image(img: Image.Image, max_width=400) -> Image.Image:
+    w, h = img.size
+    if w > max_width:
+        ratio = max_width / w
+        return img.resize((int(w * ratio), int(h * ratio)))
+    return img
 
 # --- IMAGE TO BASE64 ---
 def image_to_base64(img: Image.Image) -> str:
@@ -46,6 +54,8 @@ if "img_before" not in st.session_state:
     st.session_state.img_before = None
 if "img_after" not in st.session_state:
     st.session_state.img_after = None
+if "history_offset" not in st.session_state:
+    st.session_state.history_offset = 0
 
 # --- AUTOREFRESH TIMER IF RUNNING AND NO AFTER PHOTO YET ---
 if st.session_state.start_time and st.session_state.img_after is None:
@@ -92,6 +102,10 @@ if st.session_state.start_time:
         else:
             st.warning("No significant visual improvement detected. Try again.")
 
+        # Resize images before saving
+        resized_before = resize_image(st.session_state.img_before)
+        resized_after = resize_image(st.session_state.img_after)
+
         # Save to MongoDB
         collection.insert_one({
             "timestamp": datetime.now(CO),
@@ -99,8 +113,8 @@ if st.session_state.start_time:
             "edges_after": after_edges,
             "improved": improved,
             "duration_seconds": elapsed,
-            "image_before": image_to_base64(st.session_state.img_before),
-            "image_after": image_to_base64(st.session_state.img_after)
+            "image_before": image_to_base64(resized_before),
+            "image_after": image_to_base64(resized_after)
         })
 
         st.balloons()
@@ -116,15 +130,37 @@ if st.session_state.start_time:
 # --- HISTORY ---
 st.divider()
 st.subheader("📜 Action History")
-records = list(collection.find().sort("timestamp", -1).limit(10))
+
+# Count sessions this week
+start_of_week = datetime.now(CO) - timedelta(days=datetime.now(CO).weekday())
+weekly_count = collection.count_documents({"timestamp": {"$gte": start_of_week}})
+st.info(f"🧮 You have completed {weekly_count} cleanup sessions this week.")
+
+# Paginate history
+limit = 5
+skip = st.session_state.history_offset
+records = list(collection.find().sort("timestamp", -1).skip(skip).limit(limit))
+
 if records:
     for r in records:
         duration_m = r["duration_seconds"] // 60
         st.write(f"🕒 {r['timestamp'].astimezone(CO).strftime('%Y-%m-%d %H:%M:%S')} — {duration_m} min — Improved: {'✅' if r['improved'] else '❌'}")
         col1, col2 = st.columns(2)
         with col1:
-            st.image(base64_to_image(r["image_before"]), caption="BEFORE", width=200)
+            st.image(base64_to_image(r["image_before"]), caption=f"BEFORE\n{r['edges_before']:,} edges", width=200)
         with col2:
-            st.image(base64_to_image(r["image_after"]), caption="AFTER", width=200)
+            st.image(base64_to_image(r["image_after"]), caption=f"AFTER\n{r['edges_after']:,} edges", width=200)
+
+    col_prev, col_next = st.columns(2)
+    with col_prev:
+        if st.session_state.history_offset >= limit:
+            if st.button("⬅️ Previous"):
+                st.session_state.history_offset -= limit
+                st.rerun()
+    with col_next:
+        if collection.count_documents({}) > skip + limit:
+            if st.button("Next ➡️"):
+                st.session_state.history_offset += limit
+                st.rerun()
 else:
     st.info("No records yet.")
