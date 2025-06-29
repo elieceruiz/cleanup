@@ -56,6 +56,7 @@ if "ready" not in st.session_state:
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
     img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
+    st.caption("⚠️ Actual limit: ~6MB per image due to database constraints.")
     if img_file_before:
         st.session_state.img_before = Image.open(img_file_before)
         st.session_state.start_time = datetime.now()
@@ -71,10 +72,11 @@ if st.session_state.ready and st.session_state.img_before:
 
     delta = datetime.now() - st.session_state.start_time
     minutes, seconds = divmod(delta.total_seconds(), 60)
-    st.markdown(f"⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
+    st.markdown(f"<h2 style='color:lightgreen;'>⏱️ Time running: {int(minutes)} min {int(seconds)} sec</h2>", unsafe_allow_html=True)
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
+    st.caption("⚠️ Actual limit: ~6MB per image due to database constraints.")
 
     if img_file_after:
         img_after = Image.open(img_file_after)
@@ -118,10 +120,9 @@ st.subheader("📜 Action History")
 
 week_ago = datetime.now(tz=CO) - timedelta(days=7)
 this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}})
-st.markdown(f"**✅ Sessions this week:** {this_week_count}")
+st.markdown(f"<h3 style='color:lightgreen;'>✅ Sessions this week: {this_week_count}</h3>", unsafe_allow_html=True)
 
 records = list(db_collection.find().sort("timestamp", -1).limit(10))
-st.write("📋 Retrieved Records:", records)
 
 if not records:
     st.info("No entries yet.")
