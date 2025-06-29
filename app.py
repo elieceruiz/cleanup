@@ -97,10 +97,10 @@ with tabs[0]:
                 st.image(base64_to_image(latest.get("image_after", "")), caption="DESPUÉS", width=250)
                 st.markdown(f"Edges: {latest.get('edges_after', 0):,}")
         if st.button("🔁 Iniciar nueva sesión"):
-            st.session_state.img_before = None
-            st.session_state.ready = False
-            st.session_state.start_time = None
-            st.rerun()
+    st.session_state.clear()
+    collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
+    meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
+    st.rerun()
         st.stop()
 
     # === SESIÓN ACTIVA ===
