@@ -64,6 +64,8 @@ if "ready" not in st.session_state:
     st.session_state.ready = False
 if "last_check" not in st.session_state:
     st.session_state.last_check = datetime(2000, 1, 1, tzinfo=timezone.utc)
+if "img_after_uploaded" not in st.session_state:
+    st.session_state.img_after_uploaded = None
 
 # === SYNC META ===
 meta_doc = meta.find_one({}) or {}
@@ -78,8 +80,9 @@ if (not last or not last.get("session_active")) and (
     st.session_state.last_check = datetime.now(timezone.utc)
     st.rerun()
 
-# === AUTORREFRESH SI HAY SESIÓN ACTIVA ===
-if last and last.get("session_active"):
+# === AUTORREFRESH SOLO SI NO HAY UPPER DEL DESPUÉS ===
+# (Así no se pierde el archivo subido)
+if last and last.get("session_active") and not st.session_state.img_after_uploaded:
     st_autorefresh(interval=1000, key="refresh")
 
 # === FRONT ===
@@ -131,6 +134,7 @@ with tabs[0]:
             st.session_state.start_time = last.get("start_time").astimezone(CO)
             st.session_state.ready = True
             st.session_state.session_id = last["_id"]
+            st.session_state.img_after_uploaded = None  # Limpia la del después por si acaso
 
         if not st.session_state.img_before:
             st.subheader("📷 Sube tu imagen del ANTES")
@@ -169,41 +173,56 @@ with tabs[0]:
             img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after")
             st.caption("¡Muestra el logro alcanzado!")
 
-            if img_after_file and st.button("✅ Finalizar y comparar", use_container_width=True):
-                img_after = Image.open(img_after_file)
-                resized_after = resize_image(img_after)
-                img_b64_after = image_to_base64(resized_after)
-                edges_after = simple_edge_score(resized_after)
-                improved = edges_after < st.session_state.before_edges * 0.9
-                end_time = datetime.now(timezone.utc)
-                duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+            # Guarda la imagen en session_state ni bien la subes
+            if img_after_file is not None:
+                st.session_state.img_after_uploaded = img_after_file
 
-                # === DEBUG LOG ===
-                st.write("DEBUG:", {
-                    "session_id": str(st.session_state.session_id),
-                    "image_after_len": len(img_b64_after),
-                    "edges_after": edges_after,
-                    "duration": duration
-                })
+            if st.session_state.img_after_uploaded is not None:
+                st.info("Imagen del después lista para guardar. ¡Dale click a Finalizar y comparar!")
+                # Puedes mostrar la imagen aquí si quieres:
+                try:
+                    st.image(Image.open(st.session_state.img_after_uploaded), caption="DESPUÉS (previa)", width=320)
+                except Exception as e:
+                    st.warning(f"Error mostrando la imagen del después: {e}")
 
-                collection.update_one(
-                    {"_id": st.session_state.session_id},
-                    {"$set": {
-                        "session_active": False,
-                        "end_time": end_time,
-                        "image_after": img_b64_after,
+                if st.button("✅ Finalizar y comparar", use_container_width=True):
+                    img_after = Image.open(st.session_state.img_after_uploaded)
+                    resized_after = resize_image(img_after)
+                    img_b64_after = image_to_base64(resized_after)
+                    edges_after = simple_edge_score(resized_after)
+                    improved = edges_after < st.session_state.before_edges * 0.9
+                    end_time = datetime.now(timezone.utc)
+                    duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+
+                    # DEBUG EXTRA
+                    st.write("DEBUG:", {
+                        "session_id": str(st.session_state.session_id),
+                        "image_after_len": len(img_b64_after),
                         "edges_after": edges_after,
-                        "improved": improved,
-                        "duration_seconds": duration,
-                    }}
-                )
-                st.balloons()
-                st.success("¡Sesión registrada exitosamente! 🎊")
-                st.session_state.img_before = None
-                st.session_state.ready = False
-                st.session_state.start_time = None
-                st.session_state.before_edges = 0
-                st.rerun()
+                        "duration": duration
+                    })
+
+                    collection.update_one(
+                        {"_id": st.session_state.session_id},
+                        {"$set": {
+                            "session_active": False,
+                            "end_time": end_time,
+                            "image_after": img_b64_after,
+                            "edges_after": edges_after,
+                            "improved": improved,
+                            "duration_seconds": duration,
+                        }}
+                    )
+                    st.balloons()
+                    st.success("¡Sesión registrada exitosamente! 🎊")
+                    st.session_state.img_before = None
+                    st.session_state.ready = False
+                    st.session_state.start_time = None
+                    st.session_state.before_edges = 0
+                    st.session_state.img_after_uploaded = None
+                    st.rerun()
+            else:
+                st.info("Sube una imagen del después para poder finalizar tu sesión.")
 
 with tabs[1]:
     st.markdown("""
