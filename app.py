@@ -47,6 +47,27 @@ def format_seconds(seconds):
     m, s = divmod(rem, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
+def actualiza_meta_pellizco(user, mensaje):
+    meta.update_one(
+        {}, {"$set": {
+            "ultimo_pellizco": {
+                "user": user,
+                "datetime": datetime.now(timezone.utc),
+                "mensaje": mensaje
+            }
+        }}, upsert=True
+    )
+
+# --- Sincronización global por último pellizco ---
+if "ultimo_pellizco" not in st.session_state:
+    st.session_state.ultimo_pellizco = None
+
+meta_doc = meta.find_one({}) or {}
+nuevo_pellizco = meta_doc.get("ultimo_pellizco", {})
+if nuevo_pellizco != st.session_state.ultimo_pellizco:
+    st.session_state.ultimo_pellizco = nuevo_pellizco
+    st.rerun()
+
 if "user_login" not in st.session_state:
     st.session_state.user_login = getpass.getuser()
 
@@ -102,15 +123,8 @@ with tabs[0]:
                         "improved": None
                     }}
                 )
-                meta.update_one(
-                    {}, {"$set": {
-                        "ultimo_pellizco": {
-                            "user": st.session_state.user_login,
-                            "datetime": end_time,
-                            "mensaje": "Sesión finalizada, esperando DESPUÉS"
-                        }
-                    }}, upsert=True
-                )
+                # ---- MOMENTO 2: Pellizco al finalizar sesión ----
+                actualiza_meta_pellizco(st.session_state.user_login, "Sesión finalizada, esperando DESPUÉS")
                 st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
                 st.rerun()
                 break
@@ -139,15 +153,8 @@ with tabs[0]:
                             "improved": improved
                         }}
                     )
-                    meta.update_one(
-                        {}, {"$set": {
-                            "ultimo_pellizco": {
-                                "user": st.session_state.user_login,
-                                "datetime": datetime.now(timezone.utc),
-                                "mensaje": "Se subió el DESPUÉS"
-                            }
-                        }}, upsert=True
-                    )
+                    # ---- MOMENTO 3: Pellizco al subir DESPUÉS ----
+                    actualiza_meta_pellizco(st.session_state.user_login, "Se subió el DESPUÉS")
                     st.success("¡Foto del después registrada exitosamente!")
                     st.rerun()
                 except Exception as e:
@@ -176,16 +183,8 @@ with tabs[0]:
                 "image_base64": img_b64,
                 "edges": edges,
             })
-            meta.update_one(
-                {}, {"$set": {
-                    "last_session_start": now_utc,
-                    "ultimo_pellizco": {
-                        "user": st.session_state.user_login,
-                        "datetime": now_utc,
-                        "mensaje": "Se subió el ANTES"
-                    }
-                }}, upsert=True
-            )
+            # ---- MOMENTO 1: Pellizco al subir ANTES ----
+            actualiza_meta_pellizco(st.session_state.user_login, "Se subió el ANTES")
             st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro.")
             st.rerun()
 
