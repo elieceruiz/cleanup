@@ -4,6 +4,7 @@ from PIL import Image
 import io, base64
 from datetime import datetime, timedelta
 import pytz
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 
@@ -52,6 +53,10 @@ if "before_edges" not in st.session_state:
 if "ready" not in st.session_state:
     st.session_state.ready = False
 
+# Refresh if timer is running
+if st.session_state.ready and st.session_state.start_time:
+    st_autorefresh(interval=1000, key="refresh_timer")
+
 # === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
@@ -72,7 +77,7 @@ if st.session_state.ready and st.session_state.img_before:
 
     delta = datetime.now() - st.session_state.start_time
     minutes, seconds = divmod(delta.total_seconds(), 60)
-    st.markdown(f"<h2 style='color:lightgreen;'>⏱️ Time running: {int(minutes)} min {int(seconds)} sec</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2 style='color:orange;'>⏱️ Time running: {int(minutes)} min {int(seconds)} sec</h2>", unsafe_allow_html=True)
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
