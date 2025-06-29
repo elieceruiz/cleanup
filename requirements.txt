@@ -1,4 +1,4 @@
 streamlit
-opencv-python-headless==4.7.0.72
-pymongo
+pillow
 numpy
+pymongo
