@@ -1,25 +1,24 @@
 import streamlit as st
+import pymongo
 from PIL import Image
 import io, base64
-import pymongo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
 # === CONFIG ===
+st.set_page_config(page_title="🧹 Cleanup Visual Tracker", layout="centered")
 MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
 db = client.cleanup
 collection = db.entries
 meta = db.meta
-zona_col = pytz.timezone("America/Bogota")
 
-# === INIT STATE ===
-if "last_check" not in st.session_state:
-    st.session_state.last_check = datetime.now(timezone.utc)
+# Timezones
+CO = pytz.timezone("America/Bogota")
 
 # === UTILS ===
-def resize_image(img, max_width=300):
+def resize_image(img: Image.Image, max_width=300) -> Image.Image:
     img = img.convert("RGB")
     w, h = img.size
     if w > max_width:
@@ -27,200 +26,164 @@ def resize_image(img, max_width=300):
         img = img.resize((int(w * ratio), int(h * ratio)))
     return img
 
-def image_to_base64(img):
+def image_to_base64(img: Image.Image) -> str:
     buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=50, optimize=True)
+    img.save(buffer, format="JPEG", quality=40, optimize=True)
     return base64.b64encode(buffer.getvalue()).decode()
 
-def base64_to_image(b64):
-    return Image.open(io.BytesIO(base64.b64decode(b64)))
+def base64_to_image(b64_str: str) -> Image.Image:
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(b64_str)))
+        return img.convert("RGB")
+    except Exception as e:
+        st.warning(f"⚠️ Error cargando imagen: {e}")
+        return Image.new("RGB", (300, 200), color="gray")
 
-def simple_edge_score(img):
-    gray = img.convert("L")
-    px = list(gray.getdata())
-    diffs = [abs(px[i] - px[i+1]) for i in range(len(px)-1)]
+def simple_edge_score(img: Image.Image) -> int:
+    grayscale = img.convert("L")
+    pixels = list(grayscale.getdata())
+    diffs = [abs(pixels[i] - pixels[i+1]) for i in range(len(pixels)-1)]
     return sum(d > 10 for d in diffs)
 
-# === INTERFAZ ===
-st.set_page_config(page_title="🧹 Cleanup App", layout="centered")
-tab1, tab2 = st.tabs(["🧹 Sesion Actual", "📜 Historial"])
+# === STATE ===
+if "start_time" not in st.session_state:
+    st.session_state.start_time = None
+if "img_before" not in st.session_state:
+    st.session_state.img_before = None
+if "before_edges" not in st.session_state:
+    st.session_state.before_edges = 0
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+if "ready" not in st.session_state:
+    st.session_state.ready = False
+if "last_check" not in st.session_state:
+    st.session_state.last_check = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
-# === TAB 1 ===
-with tab1:
+# === SYNC META ===
+meta_doc = meta.find_one({}) or {}
+last_reset = meta_doc.get("last_reset", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
+last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
+last = collection.find_one(sort=[("start_time", -1)])
+historial = collection.count_documents({"session_active": False})
+
+if (not last or not last.get("session_active")) and (
+    last_reset > st.session_state.last_check or last_session_start > st.session_state.last_check
+):
+    st.session_state.last_check = datetime.now(timezone.utc)
+    st.rerun()
+
+# === AUTORREFRESH SI HAY SESIÓN ACTIVA ===
+if last and last.get("session_active"):
+    st_autorefresh(interval=1000, key="refresh")
+
+# === FRONT ===
+tabs = st.tabs(["🧽 Sesión Actual", "📜 Historial"])
+
+with tabs[0]:
     st.title("🧹 Cleanup Visual Tracker")
 
-    last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
-    historial = collection.count_documents({"session_active": False, "image_after": {"$exists": True}})
-    meta_doc = meta.find_one({}) or {}
-    last_reset = meta_doc.get("last_reset", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
-    last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
-    last_check = st.session_state.get("last_check", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
-
-    if (not last or not last.get("session_active")) and (
-        last_reset > last_check or last_session_start > last_check
-    ):
-        st.session_state.last_check = datetime.now(timezone.utc)
-        st.rerun()
-
-    if last:
-        st_autorefresh(interval=1000, key="refresh_crono")
-
-        try:
-            start_time = last["start_time"].replace(tzinfo=pytz.utc).astimezone(zona_col)
-            image_before = base64_to_image(last["image_base64"])
-            edges_before = last["edges"]
-            session_id = last["_id"]
-
-            st.subheader("🖼️ Imagen ANTES")
-            st.image(image_before, width=300)
-            st.markdown(f"**Edges ANTES:** `{edges_before}`")
-
-            now = datetime.now(zona_col)
-            elapsed = now - start_time
-            m, s = divmod(elapsed.total_seconds(), 60)
-            st.markdown(f"### ⏱️ Tiempo activo: **{int(m)} min {int(s)} sec**")
-
-            if "image_after" in last:
-                image_after = base64_to_image(last["image_after"])
-                edges_after = last.get("edges_after", "?")
-                duration = last.get("duration_seconds", 0)
-                improved = last.get("improved", False)
-                fecha = last.get("start_time").astimezone(zona_col).strftime("%Y-%m-%d %H:%M")
-
-                st.subheader("🖼️ Imagen DESPUÉS")
-                st.image(image_after, width=300)
-                st.markdown(f"**Edges DESPUÉS:** `{edges_after}`")
-
-                st.markdown("### ✅ Resultado de comparación:")
-                st.markdown(f"**Duración total:** `{duration} segundos`")
-                if improved:
-                    st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
-                else:
-                    st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
-
-                if st.button("🔁 Iniciar nueva sesión"):
-                    collection.update_one({"_id": session_id}, {"$set": {"session_active": False}})
-                    st.rerun()
-
-            else:
-                st.subheader("📸 Imagen DESPUÉS")
-                img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
-                if img_file_after:
-                    try:
-                        img = Image.open(img_file_after)
-                        resized = resize_image(img)
-                        score = simple_edge_score(resized)
-                        img_b64 = image_to_base64(resized)
-                        duration = int((datetime.now(zona_col) - start_time).total_seconds())
-                        improved = score < edges_before
-
-                        collection.update_one(
-                            {"_id": session_id},
-                            {"$set": {
-                                "session_active": False,
-                                "end_time": datetime.now(zona_col),
-                                "duration_seconds": duration,
-                                "image_after": img_b64,
-                                "edges_after": score,
-                                "improved": improved
-                            }}
-                        )
-
-                        st.success("✅ Imagen después guardada y sesión cerrada.")
-                        st.rerun()
-
-                    except Exception as e:
-                        st.error(f"❌ Error procesando imagen después: {e}")
-
-        except Exception as e:
-            st.error(f"❌ Error cargando sesión activa: {e}")
-
-    else:
-        last_closed = collection.find_one(
-            {"session_active": False, "image_after": {"$exists": True}},
-            sort=[("end_time", -1)]
-        )
-
-        if last_closed:
-            st.markdown("### ⚠️ No hay sesión activa. Última sesión completada:")
-            try:
-                image_before = base64_to_image(last_closed["image_base64"])
-                image_after = base64_to_image(last_closed["image_after"])
-                edges_before = last_closed.get("edges", "?")
-                edges_after = last_closed.get("edges_after", "?")
-                improved = last_closed.get("improved", False)
-                duration = last_closed.get("duration_seconds", 0)
-                fecha = last_closed.get("start_time").astimezone(zona_col).strftime("%Y-%m-%d %H:%M")
-
-                st.markdown(f"#### 🗓️ {fecha} — ⏱️ {duration} seg — {'✅ Mejora' if improved else '❌ Sin mejora'}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.image(image_before, caption="ANTES", width=250)
-                    st.markdown(f"**Edges:** {edges_before}")
-                with col2:
-                    st.image(image_after, caption="DESPUÉS", width=250)
-                    st.markdown(f"**Edges:** {edges_after}")
-
-            except Exception as e:
-                st.error(f"❌ Error mostrando la última sesión cerrada: {e}")
-
-            if st.button("🔁 Iniciar nueva sesión"):
-                st.rerun()
-
-        else:
-            st.subheader("📤 Subí tu imagen inicial (ANTES)")
-            img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
-            if img_file:
-                try:
-                    img = Image.open(img_file)
-                    resized = resize_image(img)
-                    score = simple_edge_score(resized)
-                    img_b64 = image_to_base64(resized)
-                    ts = datetime.now(zona_col)
-
-                    collection.insert_one({
-                        "session_active": True,
-                        "start_time": ts,
-                        "image_base64": img_b64,
-                        "edges": score
-                    })
-                    meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
-                    st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Error procesando imagen inicial: {e}")
-
-# === TAB 2: HISTORIAL ===
-with tab2:
-    st.title("📜 Historial de sesiones")
-
-    records = list(collection.find({"session_active": False, "image_after": {"$exists": True}})
-                   .sort("start_time", -1).limit(10))
-
-    if not records:
-        st.info("Aún no hay sesiones finalizadas registradas.")
-    else:
-        for r in records:
-            fecha = r.get("start_time", datetime.now()).astimezone(zona_col).strftime("%Y-%m-%d %H:%M")
-            dur = r.get("duration_seconds", 0)
-            edges_before = r.get("edges", "?")
-            edges_after = r.get("edges_after", "?")
-            improved = r.get("improved", False)
-
-            st.markdown(f"#### 🗓️ {fecha} — ⏱️ {dur} seg — {'✅ Mejora' if improved else '❌ Sin mejora'}")
+    if not last or not last.get("session_active"):
+        st.warning("⚠️ No hay sesión activa. Última sesión completada:")
+        latest = collection.find_one({"session_active": False}, sort=[("end_time", -1)])
+        if latest:
+            ts = latest["start_time"].astimezone(CO).strftime("%Y-%m-%d %H:%M")
+            dur = latest.get("duration_seconds", 0)
+            st.markdown(f"📅 {ts} — ⏱️ {dur} seg — {'✅ Mejora' if latest.get('improved') else '❌ Sin mejora'}")
             col1, col2 = st.columns(2)
             with col1:
-                st.image(base64_to_image(r["image_base64"]), caption="ANTES", width=250)
-                st.markdown(f"**Edges:** {edges_before}")
+                st.image(base64_to_image(latest.get("image_base64", "")), caption="ANTES", width=250)
+                st.markdown(f"Edges: {latest.get('edges', 0):,}")
             with col2:
-                st.image(base64_to_image(r["image_after"]), caption="DESPUÉS", width=250)
-                st.markdown(f"**Edges:** {edges_after}")
+                st.image(base64_to_image(latest.get("image_after", "")), caption="DESPUÉS", width=250)
+                st.markdown(f"Edges: {latest.get('edges_after', 0):,}")
+        if st.button("🔁 Iniciar nueva sesión"):
+            st.session_state.img_before = None
+            st.session_state.ready = False
+            st.session_state.start_time = None
+            st.rerun()
+        st.stop()
 
-    # === Herramienta de desarrollo ===
-    with st.expander("🧨 Herramientas de desarrollo"):
-        if st.button("🗑️ Borrar todos los registros (MongoDB)"):
+    # === SESIÓN ACTIVA ===
+    if not st.session_state.img_before:
+        st.subheader("Subí la imagen del ANTES")
+        img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"], key="before")
+        if img_file and st.button("🟢 Iniciar sesión"):
+            img = Image.open(img_file)
+            resized = resize_image(img)
+            img_b64 = image_to_base64(resized)
+            edges = simple_edge_score(resized)
+
+            st.session_state.img_before = resized
+            st.session_state.before_edges = edges
+            st.session_state.start_time = datetime.now(CO)
+            st.session_state.ready = True
+
+            result = collection.insert_one({
+                "session_active": True,
+                "start_time": datetime.now(timezone.utc),
+                "image_base64": img_b64,
+                "edges": edges,
+            })
+            st.session_state.session_id = result.inserted_id
+            meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
+            st.rerun()
+
+    if st.session_state.img_before:
+        st.image(st.session_state.img_before, caption="ANTES", width=300)
+        st.markdown(f"Edges: {st.session_state.before_edges:,}")
+        now = datetime.now(CO)
+        elapsed = now - st.session_state.start_time
+        st.markdown(f"⏱️ Tiempo activo: {int(elapsed.total_seconds())} seg")
+
+        st.subheader("Subí la imagen del DESPUÉS")
+        img_after_file = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+
+        if img_after_file and st.button("✅ Finalizar y comparar"):
+            img_after = Image.open(img_after_file)
+            resized_after = resize_image(img_after)
+            img_b64_after = image_to_base64(resized_after)
+            edges_after = simple_edge_score(resized_after)
+            improved = edges_after < st.session_state.before_edges * 0.9
+            end_time = datetime.now(timezone.utc)
+            duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+
+            collection.update_one(
+                {"_id": st.session_state.session_id},
+                {"$set": {
+                    "session_active": False,
+                    "end_time": end_time,
+                    "image_after": img_b64_after,
+                    "edges_after": edges_after,
+                    "improved": improved,
+                    "duration_seconds": duration,
+                }}
+            )
+            st.success("🧹 Sesión registrada exitosamente.")
+            st.session_state.img_before = None
+            st.session_state.ready = False
+            st.session_state.start_time = None
+            st.session_state.before_edges = 0
+            st.rerun()
+
+with tabs[1]:
+    st.title("📜 Historial")
+    registros = list(collection.find({"session_active": False}).sort("start_time", -1).limit(10))
+    for r in registros:
+        ts = r["start_time"].astimezone(CO).strftime("%Y-%m-%d %H:%M:%S")
+        dur = r.get("duration_seconds", 0)
+        st.markdown(f"📅 {ts} — ⏱️ {dur} seg — {'✅ Mejora' if r.get('improved') else '❌ Sin mejora'}")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(base64_to_image(r.get("image_base64", "")), caption="ANTES", width=200)
+            st.markdown(f"Edges: {r.get('edges', 0):,}")
+        with col2:
+            st.image(base64_to_image(r.get("image_after", "")), caption="DESPUÉS", width=200)
+            st.markdown(f"Edges: {r.get('edges_after', 0):,}")
+        st.divider()
+
+    with st.expander("🧨 Borrar todos los registros"):
+        if st.button("🗑️ Borrar todo"):
             collection.delete_many({})
             meta.update_one({}, {"$set": {"last_reset": datetime.now(timezone.utc)}}, upsert=True)
-            st.success("✅ Todos los registros han sido eliminados.")
+            st.success("Registros eliminados.")
             st.rerun()
