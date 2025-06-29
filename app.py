@@ -2,7 +2,7 @@ import streamlit as st
 import pymongo
 from PIL import Image
 import io, base64
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
@@ -46,7 +46,6 @@ def simple_edge_score(img: Image.Image) -> int:
     return sum(d > 10 for d in diffs)
 
 def format_seconds(seconds: int) -> str:
-    """Convierte segundos en HH:MM:SS amigable."""
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02}:{m:02}:{s:02}"
@@ -170,41 +169,43 @@ with tabs[0]:
             st.divider()
 
             st.subheader("📸 Sube la imagen del DESPUÉS")
-            img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
-            st.caption("¡Muestra el resultado alcanzado!")
-
-            if img_after_file is not None:
-                try:
-                    if not st.session_state.session_id:
-                        st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
-                        st.stop()
-                    img_after = Image.open(img_after_file)
-                    resized_after = resize_image(img_after)
-                    img_b64_after = image_to_base64(resized_after)
-                    edges_after = simple_edge_score(resized_after)
-                    result = collection.update_one(
-                        {"_id": st.session_state.session_id},
-                        {"$set": {
-                            "image_after": img_b64_after,
-                            "edges_after": edges_after
-                        }}
-                    )
-                    if result.modified_count == 1:
-                        st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
-                    else:
-                        st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
-                except Exception as e:
-                    import traceback
-                    st.error(f"Error al procesar o guardar la imagen: {e}")
-                    print(traceback.format_exc())
-
             img_after_b64 = last.get("image_after")
-            edges_after_val = last.get("edges_after")
-            if img_after_b64:
+            # Si NO hay imagen guardada, muestra el uploader y procesa subida
+            if not img_after_b64:
+                img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
+                st.caption("¡Muestra el resultado alcanzado!")
+                if img_after_file is not None:
+                    try:
+                        if not st.session_state.session_id:
+                            st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
+                            st.stop()
+                        img_after = Image.open(img_after_file)
+                        resized_after = resize_image(img_after)
+                        img_b64_after = image_to_base64(resized_after)
+                        edges_after = simple_edge_score(resized_after)
+                        result = collection.update_one(
+                            {"_id": st.session_state.session_id},
+                            {"$set": {
+                                "image_after": img_b64_after,
+                                "edges_after": edges_after
+                            }}
+                        )
+                        if result.modified_count == 1:
+                            st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
+                        else:
+                            st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        import traceback
+                        st.error(f"Error al procesar o guardar la imagen: {e}")
+                        print(traceback.format_exc())
+            else:
+                # Si ya hay imagen guardada, solo la muestras
                 try:
                     st.image(base64_to_image(img_after_b64), caption="DESPUÉS (guardada)", width=320)
                 except Exception as e:
                     st.warning(f"Error mostrando la imagen del después: {e}")
+                edges_after_val = last.get("edges_after")
                 if edges_after_val is not None:
                     st.markdown(f"**Saturación visual después:** `{edges_after_val:,}`")
                 if st.button("✅ Finalizar y comparar", use_container_width=True):
@@ -231,7 +232,7 @@ with tabs[0]:
                     st.session_state.start_time = None
                     st.session_state.before_edges = 0
                     st.rerun()
-            else:
+            if not img_after_b64:
                 st.info("Sube una imagen del después para poder finalizar tu sesión.")
 
 with tabs[1]:
