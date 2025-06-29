@@ -85,7 +85,7 @@ if st.session_state.start_time:
         st.write(f"Edge pixels BEFORE: {st.session_state.before_edges:,}")
         st.write(f"Edge pixels AFTER: {after_edges:,}")
 
-        improved = after_edges < st.session_state.before_edges
+        improved = after_edges < (st.session_state.before_edges * 0.9)
 
         if improved:
             st.success("🎉 Well done! You were proactive and reduced visual clutter.")
