@@ -4,8 +4,9 @@ import io, base64
 import pymongo
 from datetime import datetime
 import pytz
-
 from streamlit_autorefresh import st_autorefresh
+
+# === AUTOREFRESH ===
 st_autorefresh(interval=1000, key="refresh")
 
 # === CONFIG ===
@@ -38,100 +39,90 @@ def simple_edge_score(img):
     diffs = [abs(px[i] - px[i+1]) for i in range(len(px)-1)]
     return sum(d > 10 for d in diffs)
 
-# === INIT SESSION STATE ===
+# === INTERFAZ ===
 st.set_page_config(page_title="🧹 Cleanup App", layout="centered")
+tab1, tab2 = st.tabs(["🧹 Sesion Actual", "📜 Historial"])
 
-for k in ["start_time", "image_before", "edges_before", "session_id", "image_after", "edges_after", "result_shown"]:
-    if k not in st.session_state:
-        st.session_state[k] = None
-
-# === TABS ===
-tab1, tab2 = st.tabs(["🧹 Sesión Actual", "📜 Historial"])
-
-# === TAB 1: SESIÓN ACTUAL ===
+# === TAB 1 ===
 with tab1:
     st.title("🧹 Cleanup Visual Tracker")
 
-    # Recuperar sesión activa si hay
-    if st.session_state.start_time is None:
-        last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
-        if last:
-            try:
-                st.session_state.start_time = last["start_time"].replace(tzinfo=pytz.utc).astimezone(zona_col)
-                st.session_state.image_before = base64_to_image(last["image_base64"])
-                st.session_state.edges_before = last["edges"]
-                st.session_state.session_id = last["_id"]
-            except:
-                st.warning("⚠️ No se pudo restaurar la sesión anterior.")
+    last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
 
-    # Si ya cargó la imagen ANTES
-    if st.session_state.image_before:
-        st.subheader("🖼️ Imagen ANTES")
-        st.image(st.session_state.image_before, width=300)
-        st.markdown(f"**Edges ANTES:** `{st.session_state.edges_before}`")
+    if last:
+        try:
+            start_time = last["start_time"].replace(tzinfo=pytz.utc).astimezone(zona_col)
+            image_before = base64_to_image(last["image_base64"])
+            edges_before = last["edges"]
+            session_id = last["_id"]
 
-        now = datetime.now(zona_col)
-        elapsed = now - st.session_state.start_time
-        m, s = divmod(elapsed.total_seconds(), 60)
-        st.markdown(f"### ⏱️ Tiempo activo: **{int(m)} min {int(s)} sec**")
+            st.subheader("🖼️ Imagen ANTES")
+            st.image(image_before, width=300)
+            st.markdown(f"**Edges ANTES:** `{edges_before}`")
 
-        # Subir y procesar imagen después
-        st.subheader("📸 Imagen DESPUÉS")
-        img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+            now = datetime.now(zona_col)
+            elapsed = now - start_time
+            m, s = divmod(elapsed.total_seconds(), 60)
+            st.markdown(f"### ⏱️ Tiempo activo: **{int(m)} min {int(s)} sec**")
 
-        if img_file_after and st.session_state.image_after is None:
-            try:
-                img = Image.open(img_file_after)
-                resized = resize_image(img)
-                score = simple_edge_score(resized)
-                img_b64 = image_to_base64(resized)
-                duration = int((datetime.now(zona_col) - st.session_state.start_time).total_seconds())
-                improved = score < st.session_state.edges_before
+            if "image_after" in last:
+                image_after = base64_to_image(last["image_after"])
+                edges_after = last.get("edges_after", "?")
+                duration = last.get("duration_seconds", 0)
+                improved = last.get("improved", False)
 
-                collection.update_one(
-                    {"_id": st.session_state.session_id},
-                    {"$set": {
-                        "session_active": False,
-                        "end_time": datetime.now(zona_col),
-                        "duration_seconds": duration,
-                        "image_after": img_b64,
-                        "edges_after": score,
-                        "improved": improved
-                    }}
-                )
+                st.subheader("🖼️ Imagen DESPUÉS")
+                st.image(image_after, width=300)
+                st.markdown(f"**Edges DESPUÉS:** `{edges_after}`")
 
-                st.session_state.image_after = resized
-                st.session_state.edges_after = score
-                st.session_state.result_shown = True
-                st.success("✅ Imagen procesada y sesión cerrada.")
+                st.markdown("### ✅ Resultado de comparación:")
+                st.markdown(f"**Duración total:** `{duration} segundos`")
+                if improved:
+                    st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
+                else:
+                    st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
 
-            except Exception as e:
-                st.error(f"❌ Error al guardar sesión: {e}")
+                if st.button("🔁 Iniciar nueva sesión"):
+                    collection.update_one({"_id": session_id}, {"$set": {"session_active": False}})
+                    st.rerun()
 
-        if st.session_state.result_shown and st.session_state.image_after:
-            st.image(st.session_state.image_after, width=300, caption="🖼️ Imagen DESPUÉS")
-            st.markdown(f"**Edges DESPUÉS:** `{st.session_state.edges_after}`")
-
-            duration = int((datetime.now(zona_col) - st.session_state.start_time).total_seconds())
-            improved = st.session_state.edges_after < st.session_state.edges_before
-
-            st.markdown("### ✅ Resultado de comparación:")
-            st.markdown(f"**Duración total:** `{duration} segundos`")
-            if improved:
-                st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
             else:
-                st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
+                st.subheader("📸 Imagen DESPUÉS")
+                img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
+                if img_file_after:
+                    try:
+                        img = Image.open(img_file_after)
+                        resized = resize_image(img)
+                        score = simple_edge_score(resized)
+                        img_b64 = image_to_base64(resized)
+                        duration = int((datetime.now(zona_col) - start_time).total_seconds())
+                        improved = score < edges_before
 
-            if st.button("🔁 Iniciar nueva sesión"):
-                st.session_state.clear()
-                st.rerun()
+                        collection.update_one(
+                            {"_id": session_id},
+                            {"$set": {
+                                "session_active": False,
+                                "end_time": datetime.now(zona_col),
+                                "duration_seconds": duration,
+                                "image_after": img_b64,
+                                "edges_after": score,
+                                "improved": improved
+                            }}
+                        )
 
-    # Si aún no hay sesión activa, subir imagen inicial
+                        st.success("✅ Imagen después guardada y sesión cerrada.")
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Error procesando imagen después: {e}")
+
+        except Exception as e:
+            st.error(f"❌ Error cargando sesión activa: {e}")
+
     else:
         st.subheader("📤 Subí tu imagen inicial (ANTES)")
         img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
-
-        if img_file and st.session_state.image_before is None:
+        if img_file:
             try:
                 img = Image.open(img_file)
                 resized = resize_image(img)
@@ -139,20 +130,16 @@ with tab1:
                 img_b64 = image_to_base64(resized)
                 ts = datetime.now(zona_col)
 
-                res = collection.insert_one({
+                collection.insert_one({
                     "session_active": True,
                     "start_time": ts,
                     "image_base64": img_b64,
                     "edges": score
                 })
 
-                st.session_state.start_time = ts
-                st.session_state.image_before = resized
-                st.session_state.edges_before = score
-                st.session_state.session_id = res.inserted_id
-
                 st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
                 st.rerun()
+
             except Exception as e:
                 st.error(f"❌ Error procesando imagen inicial: {e}")
 
@@ -160,9 +147,8 @@ with tab1:
 with tab2:
     st.title("📜 Historial de sesiones")
 
-    records = list(
-        collection.find({"session_active": False}).sort("start_time", -1).limit(10)
-    )
+    records = list(collection.find({"session_active": False, "image_after": {"$exists": True}})
+                   .sort("start_time", -1).limit(10))
 
     if not records:
         st.info("Aún no hay sesiones finalizadas registradas.")
@@ -180,8 +166,5 @@ with tab2:
                 st.image(base64_to_image(r["image_base64"]), caption="ANTES", width=250)
                 st.markdown(f"**Edges:** {edges_before}")
             with col2:
-                if "image_after" in r:
-                    st.image(base64_to_image(r["image_after"]), caption="DESPUÉS", width=250)
-                    st.markdown(f"**Edges:** {edges_after}")
-                else:
-                    st.warning("⚠️ No se cargó imagen después.")
+                st.image(base64_to_image(r["image_after"]), caption="DESPUÉS", width=250)
+                st.markdown(f"**Edges:** {edges_after}")
