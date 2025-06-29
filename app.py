@@ -38,7 +38,9 @@ def simple_edge_score(img: Image.Image) -> int:
     diffs = [abs(pixels[i] - pixels[i+1]) for i in range(len(pixels)-1)]
     return sum(d > 10 for d in diffs)
 
-# === SESSION STATE ===
+# === FRONT ===
+st.title("🧹 Visual Cleanup")
+
 if "start_time" not in st.session_state:
     last_session = db_collection.find_one({"session_active": True})
     if last_session:
@@ -59,10 +61,7 @@ if "before_edges" not in st.session_state:
 if "ready" not in st.session_state:
     st.session_state.ready = False
 
-# === FRONT ===
-st.title("🧹 Visual Cleanup")
-
-# === BEFORE ===
+# === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
     img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
@@ -83,16 +82,19 @@ if not st.session_state.img_before:
         st.session_state.session_id = result.inserted_id
         st.rerun()
 
-# === AFTER ===
+# === IF BEFORE EXISTS ===
 if st.session_state.ready and st.session_state.img_before:
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
-    # Cronómetro persistente
-    now = datetime.now(tz=CO)
-    elapsed = now - st.session_state.start_time
-    minutes, seconds = divmod(elapsed.total_seconds(), 60)
-    st.markdown(f"### ⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
+    placeholder = st.empty()
+    if "start_time" in st.session_state and st.session_state.start_time:
+        now = datetime.now(tz=CO)
+        elapsed = now - st.session_state.start_time
+        minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+        placeholder.markdown(f"### ⏱️ Time running: **{minutes} min {seconds} sec**")
+    else:
+        placeholder.markdown("### ⏱️ Time running: 0 min 0 sec")
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
@@ -101,8 +103,10 @@ if st.session_state.ready and st.session_state.img_before:
         img_after = Image.open(img_file_after)
         resized_after = resize_image(img_after)
         after_edges = simple_edge_score(resized_after)
+
         duration = int((datetime.now(tz=CO) - st.session_state.start_time).total_seconds())
         improved = after_edges < (st.session_state.before_edges * 0.9)
+
         img_b64_after = image_to_base64(resized_after)
 
         if len(img_b64_after) > 6_000_000:
@@ -118,23 +122,22 @@ if st.session_state.ready and st.session_state.img_before:
                         "improved": improved,
                         "image_after": img_b64_after,
                         "edges_after": after_edges,
-                        "timestamp": datetime.now(tz=CO)
                     }}
                 )
                 st.success("✅ Action recorded!")
-                st.markdown(f"**Edges BEFORE:** {st.session_state.before_edges:,}")
-                st.markdown(f"**Edges AFTER:** {after_edges:,}")
-                st.markdown(f"**Improved:** {'✅ Yes' if improved else '❌ No'}")
+                st.write("📝 Entry successfully saved to MongoDB.")
             except Exception as e:
                 st.error(f"❌ Failed to save entry: {e}")
+                st.stop()
 
+            # Reset session state
             st.session_state.start_time = None
             st.session_state.img_before = None
             st.session_state.before_edges = 0
             st.session_state.ready = False
             st.rerun()
 
-# === HISTORIAL ===
+# === HISTORY ===
 st.subheader("📜 Action History")
 
 week_ago = datetime.now(tz=CO) - timedelta(days=7)
@@ -142,7 +145,10 @@ this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}
 st.markdown(f"**✅ Sessions this week:** {this_week_count}")
 
 records = list(db_collection.find({"session_active": False}).sort("start_time", -1).limit(10))
-if records:
+
+if not records:
+    st.info("No entries yet.")
+else:
     if "page" not in st.session_state:
         st.session_state.page = 0
 
@@ -172,5 +178,3 @@ if records:
         if st.button("Next ➡️") and end < len(records):
             st.session_state.page += 1
             st.rerun()
-else:
-    st.info("No entries yet.")
