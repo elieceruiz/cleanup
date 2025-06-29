@@ -177,6 +177,15 @@ with tabs[0]:
                 improved = edges_after < st.session_state.before_edges * 0.9
                 end_time = datetime.now(timezone.utc)
                 duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+
+                # === DEBUG LOG ===
+                st.write("DEBUG:", {
+                    "session_id": str(st.session_state.session_id),
+                    "image_after_len": len(img_b64_after),
+                    "edges_after": edges_after,
+                    "duration": duration
+                })
+
                 collection.update_one(
                     {"_id": st.session_state.session_id},
                     {"$set": {
