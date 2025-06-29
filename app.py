@@ -173,23 +173,31 @@ with tabs[0]:
             img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
             st.caption("¡Muestra el resultado alcanzado!")
 
-            # Guardar imagen y saturación visual inmediatamente al subir la del después
             if img_after_file is not None:
-                img_after = Image.open(img_after_file)
-                resized_after = resize_image(img_after)
-                img_b64_after = image_to_base64(resized_after)
-                edges_after = simple_edge_score(resized_after)
-                if not last.get("image_after") or last.get("image_after") != img_b64_after:
-                    collection.update_one(
+                try:
+                    if not st.session_state.session_id:
+                        st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
+                        st.stop()
+                    img_after = Image.open(img_after_file)
+                    resized_after = resize_image(img_after)
+                    img_b64_after = image_to_base64(resized_after)
+                    edges_after = simple_edge_score(resized_after)
+                    result = collection.update_one(
                         {"_id": st.session_state.session_id},
                         {"$set": {
                             "image_after": img_b64_after,
                             "edges_after": edges_after
                         }}
                     )
-                    st.success("Imagen del después y saturación visual guardadas. ¡Ya puedes verlo en cualquier dispositivo!")
+                    if result.modified_count == 1:
+                        st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
+                    else:
+                        st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
+                except Exception as e:
+                    import traceback
+                    st.error(f"Error al procesar o guardar la imagen: {e}")
+                    print(traceback.format_exc())
 
-            # Mostrar imagen y saturación visual después si existe en Mongo
             img_after_b64 = last.get("image_after")
             edges_after_val = last.get("edges_after")
             if img_after_b64:
