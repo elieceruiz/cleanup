@@ -3,13 +3,17 @@ from PIL import Image, ImageFilter
 import numpy as np
 from datetime import datetime
 from pymongo import MongoClient
+from pytz import timezone
 import time
+import base64
+import io
 
 # --- CONFIGURATION ---
 MONGO_URI = st.secrets["mongo_uri"]
 client = MongoClient(MONGO_URI)
 db = client["visual_cleanup"]
 collection = db["records"]
+CO = timezone("America/Bogota")
 
 # --- EDGE DETECTION ---
 def count_edges(img: Image.Image) -> int:
@@ -17,6 +21,16 @@ def count_edges(img: Image.Image) -> int:
     edges = gray.filter(ImageFilter.FIND_EDGES)
     edge_array = np.array(edges)
     return int(np.sum(edge_array > 50))
+
+# --- IMAGE TO BASE64 ---
+def image_to_base64(img: Image.Image) -> str:
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+# --- BASE64 TO IMAGE ---
+def base64_to_image(b64_str: str) -> Image.Image:
+    return Image.open(io.BytesIO(base64.b64decode(b64_str)))
 
 # --- UI CONFIG ---
 st.set_page_config("Visual Cleanup", layout="centered")
@@ -37,7 +51,7 @@ if st.session_state.start_time is None:
         img_before = Image.open(before_file)
         st.session_state.img_before = img_before
         st.session_state.before_edges = count_edges(img_before)
-        st.session_state.start_time = datetime.now()
+        st.session_state.start_time = datetime.now(CO)
         st.success("📸 BEFORE photo uploaded. Timer started. Now tidy up!")
         st.image(img_before, caption="BEFORE", width=300)
         st.experimental_rerun()
@@ -45,7 +59,7 @@ if st.session_state.start_time is None:
 # --- STEP 2: While timer is running ---
 elapsed = None
 if st.session_state.start_time:
-    elapsed = (datetime.now() - st.session_state.start_time).seconds
+    elapsed = (datetime.now(CO) - st.session_state.start_time).seconds
     minutes = elapsed // 60
     seconds = elapsed % 60
     st.info(f"⏱️ Time running: {minutes} min {seconds} sec")
@@ -69,11 +83,13 @@ if st.session_state.start_time:
 
         # Save to MongoDB
         collection.insert_one({
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(CO),
             "edges_before": st.session_state.before_edges,
             "edges_after": after_edges,
             "improved": improved,
-            "duration_seconds": elapsed
+            "duration_seconds": elapsed,
+            "image_before": image_to_base64(st.session_state.img_before),
+            "image_after": image_to_base64(img_after)
         })
 
         st.balloons()
@@ -91,6 +107,11 @@ records = list(collection.find().sort("timestamp", -1).limit(10))
 if records:
     for r in records:
         duration_m = r["duration_seconds"] // 60
-        st.write(f"🕒 {r['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} — {duration_m} min — Improved: {'✅' if r['improved'] else '❌'}")
+        st.write(f"🕒 {r['timestamp'].astimezone(CO).strftime('%Y-%m-%d %H:%M:%S')} — {duration_m} min — Improved: {'✅' if r['improved'] else '❌'}")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(base64_to_image(r["image_before"]), caption="BEFORE", width=200)
+        with col2:
+            st.image(base64_to_image(r["image_after"]), caption="AFTER", width=200)
 else:
     st.info("No records yet.")
