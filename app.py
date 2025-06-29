@@ -136,7 +136,7 @@ with tabs[0]:
             st.session_state.session_id = None
             st.session_state.ready = False
             st.session_state.img_after_uploaded = None
-            st.success("¡Sesión iniciada! Ahora sube la foto del después cuando termines.")
+            st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro con el botón.")
             st.rerun()
         st.stop()
 
@@ -151,8 +151,9 @@ with tabs[0]:
         st.session_state.session_id = last["_id"]
         st.session_state.img_after_uploaded = None
 
-    if st.session_state.img_before:
-        st.success("¡Sesión activa! Cuando termines, sube la foto del después para ver el cambio en la saturación visual 🎉")
+    # SESIÓN ACTIVA: Mostrar ANTES, cronómetro y botón de parar
+    if st.session_state.img_before and last and last.get("session_active"):
+        st.success("¡Sesión activa! Cuando termines, detén el cronómetro con el botón y luego sube la foto del después.")
         st.image(st.session_state.img_before, caption="ANTES", width=320)
         st.markdown(f"**Saturación visual antes:** `{st.session_state.before_edges:,}`")
         now = datetime.now(CO)
@@ -162,91 +163,87 @@ with tabs[0]:
 
         st.divider()
 
-        st.subheader("📸 Sube la imagen del DESPUÉS")
-        img_after_b64 = last.get("image_after")
-        if not img_after_b64:
-            if last and last.get("session_active") and last.get("image_base64") and last.get("image_after") is None:
-                st.info("Sesión activa. Si subiste la foto del ANTES desde otro dispositivo, puedes continuar aquí subiendo el DESPUÉS.")
-            img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
-            st.caption("¡Muestra el resultado alcanzado!")
-            if img_after_file is not None:
-                # Lanzar spinner y mensaje
-                with st.spinner("⏳ Registrando el resultado, por favor espera..."):
-                    try:
-                        st.info("⏳ Guardando resultado y sincronizando, no cierres la ventana...")
-                        # 1. Detener cronómetro: timestamp exacto
-                        end_time = datetime.now(timezone.utc)
-                        if not st.session_state.session_id:
-                            st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
-                            st.stop()
-                        img_after = Image.open(img_after_file)
-                        resized_after = resize_image(img_after)
-                        img_b64_after = image_to_base64(resized_after)
-                        edges_after = simple_edge_score(resized_after)
-                        # 2. Guardar imagen después
-                        result = collection.update_one(
-                            {"_id": st.session_state.session_id},
-                            {"$set": {
-                                "image_after": img_b64_after,
-                                "edges_after": edges_after
-                            }}
-                        )
-                        if result.modified_count == 1:
-                            improved = edges_after < st.session_state.before_edges * 0.9
-                            duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
-                            # 3. Marcar la sesión como inactiva y guardar todo
-                            collection.update_one(
-                                {"_id": st.session_state.session_id},
-                                {"$set": {
-                                    "session_active": False,
-                                    "end_time": end_time,
-                                    "improved": improved,
-                                    "duration_seconds": duration,
-                                }}
-                            )
-                            # 4. Actualizar el meta con el pellizco usando el MISMO end_time
-                            meta.update_one(
-                                {},
-                                {"$set": {
-                                    "ultimo_pellizco": {
-                                        "user": st.session_state.user_login,
-                                        "datetime": end_time,
-                                        "mensaje": "Se subió el DESPUÉS y se mató la sesión"
-                                    }
-                                }},
-                                upsert=True
-                            )
-                            # 5. Limpiar todo el estado local
-                            for key in [
-                                "start_time", "img_before", "before_edges", "session_id",
-                                "ready", "img_after_uploaded"
-                            ]:
-                                if key in st.session_state:
-                                    del st.session_state[key]
-                            st.success("¡Sesión registrada exitosamente! 🎊")
-                            st.balloons()
-                            st.info("👌 Resultado sincronizado. Puedes ver el historial o iniciar una nueva sesión.")
-                            st.rerun()
-                        else:
-                            st.error("ERROR: No se encontró la sesión activa en Mongo para actualizar. session_id usado: " +
-                                     f"{st.session_state.session_id}")
-                            st.stop()
-                    except Exception as e:
-                        import traceback
-                        st.exception(e)
-                        st.error("Error inesperado, revisa la consola/logs para detalles.")
-                        st.text(traceback.format_exc())
-                        st.stop()
-        else:
-            try:
-                st.image(base64_to_image(img_after_b64), caption="DESPUÉS (guardada)", width=320)
-            except Exception as e:
-                st.warning(f"Error mostrando la imagen del después: {e}")
-            edges_after_val = last.get("edges_after")
-            if edges_after_val is not None:
-                st.markdown(f"**Saturación visual después:** `{edges_after_val:,}`")
-        if not img_after_b64:
-            st.info("Sube una imagen del después para poder finalizar tu sesión.")
+        # BOTÓN DE FINALIZAR/DETENER CRONÓMETRO
+        if st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True):
+            with st.spinner("Finalizando sesión y sincronizando..."):
+                end_time = datetime.now(timezone.utc)
+                duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+                collection.update_one(
+                    {"_id": st.session_state.session_id},
+                    {"$set": {
+                        "session_active": False,
+                        "end_time": end_time,
+                        "duration_seconds": duration,
+                        "improved": None  # todavía no hay después
+                    }}
+                )
+                meta.update_one(
+                    {},
+                    {"$set": {
+                        "ultimo_pellizco": {
+                            "user": st.session_state.user_login,
+                            "datetime": end_time,
+                            "mensaje": "Sesión finalizada, esperando DESPUÉS"
+                        }
+                    }},
+                    upsert=True
+                )
+                # Limpiar estado local
+                for key in [
+                    "start_time", "img_before", "before_edges", "session_id",
+                    "ready", "img_after_uploaded"
+                ]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
+                st.rerun()
+
+    # SESIÓN YA FINALIZADA y esperando foto del DESPUÉS
+    elif last and not last.get("session_active") and last.get("image_after", None) is None:
+        st.warning("Sesión finalizada. Sube la foto del DESPUÉS para completar el registro.")
+        st.image(base64_to_image(last.get("image_base64", "")), caption="ANTES (guardado)", width=320)
+        img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
+        if img_after_file is not None:
+            with st.spinner("Guardando foto del después..."):
+                try:
+                    img_after = Image.open(img_after_file)
+                    resized_after = resize_image(img_after)
+                    img_b64_after = image_to_base64(resized_after)
+                    edges_after = simple_edge_score(resized_after)
+                    improved = False
+                    edges_before = last.get("edges", 0)
+                    if edges_before:
+                        improved = edges_after < edges_before * 0.9
+                    collection.update_one(
+                        {"_id": last["_id"]},
+                        {"$set": {
+                            "image_after": img_b64_after,
+                            "edges_after": edges_after,
+                            "improved": improved
+                        }}
+                    )
+                    meta.update_one(
+                        {},
+                        {"$set": {
+                            "ultimo_pellizco": {
+                                "user": st.session_state.user_login,
+                                "datetime": datetime.now(timezone.utc),
+                                "mensaje": "Se subió el DESPUÉS"
+                            }
+                        }},
+                        upsert=True
+                    )
+                    st.success("¡Foto del después registrada exitosamente!")
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    st.error(f"Error al guardar la foto del después: {e}")
+                    st.text(traceback.format_exc())
+        st.info("Cuando subas la foto del después, se completará la sesión en el historial.")
+
+    # SESIÓN COMPLETA (ANTES y DESPUÉS)
+    elif last and not last.get("session_active") and last.get("image_after", None) is not None:
+        st.success("Sesión completada. Puedes ver el resultado en el historial.")
 
 with tabs[1]:
     st.markdown("""
