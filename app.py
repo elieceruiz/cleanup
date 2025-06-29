@@ -44,7 +44,7 @@ st.title("🧹 Visual Cleanup")
 if "start_time" not in st.session_state:
     last_session = db_collection.find_one({"session_active": True})
     if last_session:
-        st.session_state.start_time = last_session.get("start_time")
+        st.session_state.start_time = last_session["start_time"]
         st.session_state.img_before = base64_to_image(last_session["image_before"])
         st.session_state.before_edges = last_session["edges_before"]
         st.session_state.ready = True
@@ -61,6 +61,9 @@ if "before_edges" not in st.session_state:
 if "ready" not in st.session_state:
     st.session_state.ready = False
 
+if "timer_running" not in st.session_state:
+    st.session_state.timer_running = False
+
 # === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
@@ -70,15 +73,18 @@ if not st.session_state.img_before:
         resized = resize_image(st.session_state.img_before)
         st.session_state.before_edges = simple_edge_score(resized)
         st.session_state.ready = True
-
         img_b64_before = image_to_base64(resized)
+
         result = db_collection.insert_one({
             "session_active": True,
-            "start_time": None,
+            "start_time": datetime.now(tz=CO),
             "image_before": img_b64_before,
             "edges_before": st.session_state.before_edges,
         })
+
         st.session_state.session_id = result.inserted_id
+        st.session_state.start_time = datetime.now(tz=CO)
+        st.session_state.timer_running = True
         st.rerun()
 
 # === IF BEFORE EXISTS ===
@@ -86,19 +92,13 @@ if st.session_state.ready and st.session_state.img_before:
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
-    if st.session_state.start_time is None:
-        if st.button("🟢 Iniciar Cronómetro"):
-            st.session_state.start_time = datetime.now(tz=CO)
-            db_collection.update_one(
-                {"_id": st.session_state.session_id},
-                {"$set": {"start_time": st.session_state.start_time}}
-            )
-        st.stop()
-    else:
-        now = datetime.now(tz=CO)
+    now = datetime.now(tz=CO)
+    if st.session_state.start_time:
         elapsed = now - st.session_state.start_time
         minutes, seconds = divmod(elapsed.total_seconds(), 60)
-        st.markdown(f"### ⏱️ Tiempo corriendo: **{int(minutes)} min {int(seconds)} sec**")
+        st.markdown(f"### ⏱️ Tiempo activo: **{int(minutes)} min {int(seconds)} sec**")
+    else:
+        st.info("Presiona '🟢 Iniciar Cronómetro' para comenzar.")
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
@@ -128,28 +128,31 @@ if st.session_state.ready and st.session_state.img_before:
                         "edges_after": after_edges,
                     }}
                 )
-                st.success("✅ Acción registrada y guardada en MongoDB")
+                st.success("✅ Action recorded!")
+                st.write("📝 Entry successfully saved to MongoDB.")
             except Exception as e:
-                st.error(f"❌ Error al guardar: {e}")
+                st.error(f"❌ Failed to save entry: {e}")
                 st.stop()
 
+            # Reset session state
             st.session_state.start_time = None
             st.session_state.img_before = None
             st.session_state.before_edges = 0
             st.session_state.ready = False
+            st.session_state.timer_running = False
             st.rerun()
 
 # === HISTORY ===
-st.subheader("📜 Historial de Sesiones")
+st.subheader("📜 Action History")
 
 week_ago = datetime.now(tz=CO) - timedelta(days=7)
-this_week_count = db_collection.count_documents({"end_time": {"$gte": week_ago}})
-st.markdown(f"**✅ Sesiones esta semana:** {this_week_count}")
+this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}})
+st.markdown(f"**✅ Sessions this week:** {this_week_count}")
 
 records = list(db_collection.find({"session_active": False}).sort("start_time", -1).limit(10))
 
 if not records:
-    st.info("No hay entradas aún.")
+    st.info("No entries yet.")
 else:
     if "page" not in st.session_state:
         st.session_state.page = 0
@@ -160,7 +163,7 @@ else:
     for r in records[start:end]:
         ts = r.get("start_time", datetime.now()).astimezone(CO).strftime("%Y-%m-%d %H:%M:%S")
         dur_m = r.get("duration_seconds", 0) // 60
-        st.write(f"🕒 {ts} — {dur_m} min — Mejoró: {'✅' if r.get('improved') else '❌'}")
+        st.write(f"🕒 {ts} — {dur_m} min — Improved: {'✅' if r.get('improved') else '❌'}")
 
         col1, col2 = st.columns(2)
         with col1:
