@@ -49,9 +49,7 @@ def format_seconds(seconds):
     return f"{h:02}:{m:02}:{s:02}"
 
 if "user_login" not in st.session_state:
-    st.session_state.user_login = (
-        st.experimental_user.get("username") if hasattr(st, "experimental_user") else getpass.getuser()
-    )
+    st.session_state.user_login = getpass.getuser()
 
 # === SYNC ===
 meta_doc = meta.find_one({}) or {}
@@ -62,6 +60,11 @@ tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 with tabs[0]:
     st.markdown("<h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>", unsafe_allow_html=True)
     st.divider()
+
+    # AUTOSYNC: Si detecta nueva sesión activa, forzar rerun para todos
+    last_check = collection.find_one(sort=[("start_time", -1)])
+    if (not last or not last.get("session_active")) and last_check and last_check.get("session_active"):
+        st.experimental_rerun()
 
     # INICIO: NO ACTIVA
     if not last or not last.get("session_active"):
@@ -124,7 +127,12 @@ with tabs[0]:
         # Si el botón fue presionado, cerrar la sesión
         if stop_pressed:
             end_time = datetime.now(timezone.utc)
-            duration = int((end_time - doc["start_time"]).total_seconds())
+            start_time_db = doc["start_time"]
+            if start_time_db.tzinfo is None:
+                start_time_db = start_time_db.replace(tzinfo=timezone.utc)
+            else:
+                start_time_db = start_time_db.astimezone(timezone.utc)
+            duration = int((end_time - start_time_db).total_seconds())
             result = collection.update_one(
                 {"_id": doc["_id"], "session_active": True},
                 {"$set": {
