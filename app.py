@@ -13,7 +13,6 @@ MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
 db = client.cleanup
 collection = db.entries
-meta = db.meta
 CO = pytz.timezone("America/Bogota")
 
 def resize_image(img, max_width=300):
@@ -47,26 +46,38 @@ def format_seconds(seconds):
     m, s = divmod(rem, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
-def actualiza_meta_pellizco(user, mensaje):
-    meta.update_one(
-        {}, {"$set": {
-            "ultimo_pellizco": {
+def agrega_pellizco(session_id, user, mensaje):
+    collection.update_one(
+        {"_id": session_id},
+        {"$push": {
+            "meta.pellizcos": {
                 "user": user,
                 "datetime": datetime.now(timezone.utc),
                 "mensaje": mensaje
             }
-        }}, upsert=True
+        }},
+        upsert=True
     )
 
-# --- Sincronización global por último pellizco ---
+# --- Sincronización por sesión ---
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
 if "ultimo_pellizco" not in st.session_state:
     st.session_state.ultimo_pellizco = None
 
-meta_doc = meta.find_one({}) or {}
-nuevo_pellizco = meta_doc.get("ultimo_pellizco", {})
-if nuevo_pellizco != st.session_state.ultimo_pellizco:
-    st.session_state.ultimo_pellizco = nuevo_pellizco
-    st.rerun()
+# Busca la sesión activa de este usuario (o la última)
+last = collection.find_one({"session_active": True}) or collection.find_one(sort=[("start_time", -1)])
+
+if last:
+    st.session_state.session_id = last["_id"]
+    meta_local = last.get("meta", {}).get("pellizcos", [])
+    ultimo_local = meta_local[-1] if meta_local else {}
+    if ultimo_local != st.session_state.ultimo_pellizco:
+        st.session_state.ultimo_pellizco = ultimo_local
+        st.rerun()
+else:
+    st.session_state.session_id = None
+    st.session_state.ultimo_pellizco = None
 
 if "user_login" not in st.session_state:
     st.session_state.user_login = getpass.getuser()
@@ -77,10 +88,9 @@ with tabs[0]:
     st.markdown("<h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>", unsafe_allow_html=True)
     st.divider()
 
-    # --- Consulta el estado real en Mongo cada vez ---
-    last = collection.find_one(sort=[("start_time", -1)])
+    # --- Consulta la sesión activa o la última ---
+    last = collection.find_one({"session_active": True}) or collection.find_one(sort=[("start_time", -1)])
 
-    # --- Si hay sesión activa, muéstrala ---
     if last and last.get("session_active"):
         session_id = last["_id"]
         img_before = base64_to_image(last.get("image_base64", ""))
@@ -95,7 +105,6 @@ with tabs[0]:
         with stop_button:
             stop_pressed = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
 
-        # Cronómetro en vivo (sin bloquear el frontend)
         start_time = last["start_time"]
         if start_time.tzinfo is None:
             start_time = start_time.replace(tzinfo=timezone.utc)
@@ -123,13 +132,11 @@ with tabs[0]:
                         "improved": None
                     }}
                 )
-                # ---- MOMENTO 2: Pellizco al finalizar sesión ----
-                actualiza_meta_pellizco(st.session_state.user_login, "Sesión finalizada, esperando DESPUÉS")
+                agrega_pellizco(session_id, st.session_state.user_login, "Sesión finalizada, esperando DESPUÉS")
                 st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
                 st.rerun()
                 break
 
-    # --- Si no hay sesión activa, pero existe una sesión finalizada sin imagen después, mostrar uploader ---
     elif last and not last.get("session_active") and not last.get("image_after"):
         st.warning("Sesión finalizada. Sube la foto del DESPUÉS para completar el registro.")
         st.image(base64_to_image(last.get("image_base64", "")), caption="ANTES (guardado)", width=320)
@@ -153,8 +160,7 @@ with tabs[0]:
                             "improved": improved
                         }}
                     )
-                    # ---- MOMENTO 3: Pellizco al subir DESPUÉS ----
-                    actualiza_meta_pellizco(st.session_state.user_login, "Se subió el DESPUÉS")
+                    agrega_pellizco(last["_id"], st.session_state.user_login, "Se subió el DESPUÉS")
                     st.success("¡Foto del después registrada exitosamente!")
                     st.rerun()
                 except Exception as e:
@@ -163,9 +169,7 @@ with tabs[0]:
                     st.text(traceback.format_exc())
         st.info("Cuando subas la foto del después, se completará la sesión en el historial.")
 
-    # --- Si no hay sesión activa ni pendiente, o ya tiene después, permite iniciar nueva ---
     else:
-        # Autoreload si otro usuario inicia sesión en paralelo
         last_check = collection.find_one(sort=[("start_time", -1)])
         if (not last or not last.get("session_active")) and last_check and last_check.get("session_active"):
             st.rerun()
@@ -177,14 +181,20 @@ with tabs[0]:
             img_b64 = image_to_base64(resized)
             edges = simple_edge_score(resized)
             now_utc = datetime.now(timezone.utc)
-            collection.insert_one({
+            session = collection.insert_one({
                 "session_active": True,
                 "start_time": now_utc,
                 "image_base64": img_b64,
                 "edges": edges,
+                "meta": {
+                    "pellizcos": [{
+                        "user": st.session_state.user_login,
+                        "datetime": now_utc,
+                        "mensaje": "Se subió el ANTES"
+                    }]
+                }
             })
-            # ---- MOMENTO 1: Pellizco al subir ANTES ----
-            actualiza_meta_pellizco(st.session_state.user_login, "Se subió el ANTES")
+            agrega_pellizco(session.inserted_id, st.session_state.user_login, "Se subió el ANTES")
             st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro.")
             st.rerun()
 
@@ -229,6 +239,5 @@ with tabs[1]:
         if st.button("🗑️ Borrar todo", use_container_width=True):
             now_utc = datetime.now(timezone.utc)
             collection.delete_many({})
-            meta.update_one({}, {"$set": {"last_reset": now_utc}}, upsert=True)
             st.success("Registros eliminados.")
             st.rerun()
