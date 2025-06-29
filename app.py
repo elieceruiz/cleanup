@@ -99,6 +99,14 @@ with tabs[0]:
         if st.button("🔁 Iniciar nueva sesión"):
     st.session_state.clear()
     collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
+    meta.update_one(
+        {},
+        {"$set": {"last_session_start": datetime.now(timezone.utc)}},
+        upsert=True
+    )
+    st.rerun()
+    st.session_state.clear()
+    collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
     meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
     st.rerun()
     # Limpiar estado local
