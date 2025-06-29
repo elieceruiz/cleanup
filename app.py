@@ -88,13 +88,13 @@ if st.session_state.ready and st.session_state.img_before:
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
     placeholder = st.empty()
-    if "start_time" in st.session_state and st.session_state.start_time:
-        now = datetime.now(tz=CO)
+    now = datetime.now(tz=CO)
+    if isinstance(st.session_state.get("start_time"), datetime):
         elapsed = now - st.session_state.start_time
-        minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
-        placeholder.markdown(f"### ⏱️ Time running: **{minutes} min {seconds} sec**")
+        minutes, seconds = divmod(elapsed.total_seconds(), 60)
+        placeholder.markdown(f"### ⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
     else:
-        placeholder.markdown("### ⏱️ Time running: 0 min 0 sec")
+        st.warning("⏱️ No active session found.")
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
@@ -122,6 +122,7 @@ if st.session_state.ready and st.session_state.img_before:
                         "improved": improved,
                         "image_after": img_b64_after,
                         "edges_after": after_edges,
+                        "timestamp": datetime.now(tz=CO)
                     }}
                 )
                 st.success("✅ Action recorded!")
