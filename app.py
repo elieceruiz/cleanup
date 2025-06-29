@@ -80,10 +80,10 @@ if (not last or not last.get("session_active")) and (
     st.session_state.last_check = datetime.now(timezone.utc)
     st.rerun()
 
-# === AUTORREFRESH SOLO SI NO HAY UPPER DEL DESPUÉS ===
-# (Así no se pierde el archivo subido)
-if last and last.get("session_active") and not st.session_state.img_after_uploaded:
-    st_autorefresh(interval=1000, key="refresh")
+# === AUTORREFRESH ALTO: sincronía en todos los dispositivos ===
+if last and last.get("session_active"):
+    # Refresca cada 1 segundo para todos los dispositivos abiertos
+    st_autorefresh(interval=1000, key="sincronizador_global")
 
 # === FRONT ===
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
@@ -164,8 +164,9 @@ with tabs[0]:
             st.image(st.session_state.img_before, caption="ANTES", width=320)
             st.markdown(f"**Edges:** `{st.session_state.before_edges:,}`")
             now = datetime.now(CO)
-            elapsed = now - st.session_state.start_time
-            st.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed.total_seconds()))}</code>", unsafe_allow_html=True)
+            if st.session_state.start_time:
+                elapsed = now - st.session_state.start_time
+                st.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed.total_seconds()))}</code>", unsafe_allow_html=True)
 
             st.divider()
 
