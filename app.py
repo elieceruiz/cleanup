@@ -38,7 +38,7 @@ def simple_edge_score(img):
     diffs = [abs(px[i] - px[i+1]) for i in range(len(px)-1)]
     return sum(d > 10 for d in diffs)
 
-# === INIT STATE ===
+# === INIT ===
 st.set_page_config(page_title="🧹 Cleanup Tracker", layout="centered")
 st.title("🧹 Cleanup Visual Tracker")
 
@@ -46,7 +46,7 @@ for k in ["start_time", "image_before", "edges_before", "session_id", "image_aft
     if k not in st.session_state:
         st.session_state[k] = None
 
-# === RECUPERAR SI HAY SESIÓN ACTIVA ===
+# === RECUPERAR SESIÓN ACTIVA ===
 if st.session_state.start_time is None:
     last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
     if last:
@@ -75,11 +75,16 @@ if st.session_state.image_before:
     img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
 
     if img_file_after and st.session_state.image_after is None:
-        img = Image.open(img_file_after)
-        resized = resize_image(img)
-        score = simple_edge_score(resized)
-        st.session_state.image_after = resized
-        st.session_state.edges_after = score
+        try:
+            img = Image.open(img_file_after)
+            resized = resize_image(img)
+            score = simple_edge_score(resized)
+            st.session_state.image_after = resized
+            st.session_state.edges_after = score
+            st.success("✅ Imagen después cargada y analizada.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error procesando imagen después: {e}")
 
     if st.session_state.image_after:
         st.image(st.session_state.image_after, width=300, caption="🖼️ Imagen DESPUÉS")
@@ -103,7 +108,8 @@ if st.session_state.image_before:
                     }}
                 )
 
-                st.markdown("### ✅ Resultado:")
+                st.markdown("### ✅ Resultado de comparación:")
+                st.markdown(f"**Duración total:** `{duration} segundos`")
                 if improved:
                     st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
                 else:
@@ -112,18 +118,19 @@ if st.session_state.image_before:
                 st.session_state.result_shown = True
 
             except Exception as e:
-                st.error(f"❌ Error al guardar: {e}")
+                st.error(f"❌ Error al guardar resultado: {e}")
 
     if st.session_state.result_shown:
         if st.button("🔁 Iniciar nueva sesión"):
             st.session_state.clear()
             st.rerun()
 
-# === SI NO HAY SESIÓN ACTIVA, PERMITIR INICIO ===
+# === SI NO HAY SESIÓN, PERMITIR INICIO CON SUBIDA AUTOMÁTICA ===
 else:
-    st.subheader("📤 Subir imagen inicial (ANTES)")
+    st.subheader("📤 Subí tu imagen inicial (ANTES)")
     img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
-    if img_file and st.button("🟢 Iniciar sesión"):
+
+    if img_file and st.session_state.image_before is None:
         try:
             img = Image.open(img_file)
             resized = resize_image(img)
@@ -143,6 +150,8 @@ else:
             st.session_state.edges_before = score
             st.session_state.session_id = res.inserted_id
 
+            st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
             st.rerun()
+
         except Exception as e:
-            st.error(f"❌ Error iniciando sesión: {e}")
+            st.error(f"❌ Error procesando imagen inicial: {e}")
