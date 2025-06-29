@@ -82,7 +82,6 @@ if (not last or not last.get("session_active")) and (
 
 # === AUTORREFRESH ALTO: sincronía en todos los dispositivos ===
 if last and last.get("session_active"):
-    # Refresca cada 1 segundo para todos los dispositivos abiertos
     st_autorefresh(interval=1000, key="sincronizador_global")
 
 # === FRONT ===
@@ -92,7 +91,7 @@ with tabs[0]:
     st.markdown("""
         <h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>
         <p style='text-align:center; color:#3a506b; font-size:1.2em;'>
-            Lleva el control visual y divertido de tus limpiezas. ¡Sube fotos de antes y después, mide el progreso y comparte los resultados!
+            Lleva el control visual y motivador de tus limpiezas. ¡Sube fotos de antes y después y observa cómo cambia la saturación visual del espacio!
         </p>
     """, unsafe_allow_html=True)
 
@@ -104,14 +103,14 @@ with tabs[0]:
         if latest:
             ts = latest["start_time"].astimezone(CO).strftime("%Y-%m-%d %H:%M")
             dur = latest.get("duration_seconds", 0)
-            st.markdown(f"**⏳ Última sesión:** `{ts}` &nbsp; | &nbsp; **Duración:** `{format_seconds(dur)}` &nbsp; | &nbsp; {'✅ Mejoró' if latest.get('improved') else '❌ Sin mejora'}")
+            st.markdown(f"**⏳ Última sesión:** `{ts}` &nbsp; | &nbsp; **Duración:** `{format_seconds(dur)}` &nbsp; | &nbsp; {'✅ Bajó la saturación visual' if latest.get('improved') else '❌ Sin cambio visible'}")
             col1, col2 = st.columns(2)
             with col1:
                 st.image(base64_to_image(latest.get("image_base64", "")), caption="ANTES", width=250)
-                st.markdown(f"Edges: `{latest.get('edges', 0):,}`")
+                st.markdown(f"Saturación visual: `{latest.get('edges', 0):,}`")
             with col2:
                 st.image(base64_to_image(latest.get("image_after", "")), caption="DESPUÉS", width=250)
-                st.markdown(f"Edges: `{latest.get('edges_after', 0):,}`")
+                st.markdown(f"Saturación visual: `{latest.get('edges_after', 0):,}`")
         st.divider()
         if st.button("🚀 Iniciar nueva sesión", use_container_width=True):
             st.session_state.clear()
@@ -125,7 +124,7 @@ with tabs[0]:
 
     # === SESIÓN ACTIVA ===
     if last and last.get("session_active"):
-        # Sincronización robusta del estado local
+        # Sincronizar estado local
         mongo_session_id = str(last["_id"])
         local_session_id = str(st.session_state.session_id) if st.session_state.session_id else None
         if mongo_session_id != local_session_id:
@@ -134,7 +133,7 @@ with tabs[0]:
             st.session_state.start_time = last.get("start_time").astimezone(CO)
             st.session_state.ready = True
             st.session_state.session_id = last["_id"]
-            st.session_state.img_after_uploaded = None  # Limpia la del después por si acaso
+            st.session_state.img_after_uploaded = None
 
         if not st.session_state.img_before:
             st.subheader("📷 Sube tu imagen del ANTES")
@@ -160,9 +159,9 @@ with tabs[0]:
                 st.rerun()
 
         if st.session_state.img_before:
-            st.success("¡Sesión activa! Anímate a limpiar y luego sube tu foto del después 🎉")
+            st.success("¡Sesión activa! Cuando termines, sube la foto del después para ver el cambio en la saturación visual 🎉")
             st.image(st.session_state.img_before, caption="ANTES", width=320)
-            st.markdown(f"**Edges:** `{st.session_state.before_edges:,}`")
+            st.markdown(f"**Saturación visual antes:** `{st.session_state.before_edges:,}`")
             now = datetime.now(CO)
             if st.session_state.start_time:
                 elapsed = now - st.session_state.start_time
@@ -171,45 +170,48 @@ with tabs[0]:
             st.divider()
 
             st.subheader("📸 Sube la imagen del DESPUÉS")
-            img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after")
-            st.caption("¡Muestra el logro alcanzado!")
+            img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
+            st.caption("¡Muestra el resultado alcanzado!")
 
-            # Guarda la imagen en session_state ni bien la subes
+            # Guardar imagen y saturación visual inmediatamente al subir la del después
             if img_after_file is not None:
-                st.session_state.img_after_uploaded = img_after_file
+                img_after = Image.open(img_after_file)
+                resized_after = resize_image(img_after)
+                img_b64_after = image_to_base64(resized_after)
+                edges_after = simple_edge_score(resized_after)
+                if not last.get("image_after") or last.get("image_after") != img_b64_after:
+                    collection.update_one(
+                        {"_id": st.session_state.session_id},
+                        {"$set": {
+                            "image_after": img_b64_after,
+                            "edges_after": edges_after
+                        }}
+                    )
+                    st.success("Imagen del después y saturación visual guardadas. ¡Ya puedes verlo en cualquier dispositivo!")
 
-            if st.session_state.img_after_uploaded is not None:
-                st.info("Imagen del después lista para guardar. ¡Dale click a Finalizar y comparar!")
-                # Puedes mostrar la imagen aquí si quieres:
+            # Mostrar imagen y saturación visual después si existe en Mongo
+            img_after_b64 = last.get("image_after")
+            edges_after_val = last.get("edges_after")
+            if img_after_b64:
                 try:
-                    st.image(Image.open(st.session_state.img_after_uploaded), caption="DESPUÉS (previa)", width=320)
+                    st.image(base64_to_image(img_after_b64), caption="DESPUÉS (guardada)", width=320)
                 except Exception as e:
                     st.warning(f"Error mostrando la imagen del después: {e}")
-
+                if edges_after_val is not None:
+                    st.markdown(f"**Saturación visual después:** `{edges_after_val:,}`")
                 if st.button("✅ Finalizar y comparar", use_container_width=True):
-                    img_after = Image.open(st.session_state.img_after_uploaded)
+                    img_after = base64_to_image(img_after_b64)
                     resized_after = resize_image(img_after)
-                    img_b64_after = image_to_base64(resized_after)
-                    edges_after = simple_edge_score(resized_after)
+                    edges_after = last.get("edges_after", simple_edge_score(resized_after))
                     improved = edges_after < st.session_state.before_edges * 0.9
                     end_time = datetime.now(timezone.utc)
                     duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
-
-                    # DEBUG EXTRA
-                    st.write("DEBUG:", {
-                        "session_id": str(st.session_state.session_id),
-                        "image_after_len": len(img_b64_after),
-                        "edges_after": edges_after,
-                        "duration": duration
-                    })
 
                     collection.update_one(
                         {"_id": st.session_state.session_id},
                         {"$set": {
                             "session_active": False,
                             "end_time": end_time,
-                            "image_after": img_b64_after,
-                            "edges_after": edges_after,
                             "improved": improved,
                             "duration_seconds": duration,
                         }}
@@ -220,7 +222,6 @@ with tabs[0]:
                     st.session_state.ready = False
                     st.session_state.start_time = None
                     st.session_state.before_edges = 0
-                    st.session_state.img_after_uploaded = None
                     st.rerun()
             else:
                 st.info("Sube una imagen del después para poder finalizar tu sesión.")
@@ -234,14 +235,14 @@ with tabs[1]:
     for r in registros:
         ts = r["start_time"].astimezone(CO).strftime("%Y-%m-%d %H:%M:%S")
         dur = r.get("duration_seconds", 0)
-        st.markdown(f"🗓️ `{ts}` — ⏱️ `{format_seconds(dur)}` — {'✅ Mejoró' if r.get('improved') else '❌ Sin mejora'}")
+        st.markdown(f"🗓️ `{ts}` — ⏱️ `{format_seconds(dur)}` — {'✅ Bajó la saturación visual' if r.get('improved') else '❌ Sin cambio visible'}")
         col1, col2 = st.columns(2)
         with col1:
             st.image(base64_to_image(r.get("image_base64", "")), caption="ANTES", width=200)
-            st.markdown(f"Edges: `{r.get('edges', 0):,}`")
+            st.markdown(f"Saturación visual: `{r.get('edges', 0):,}`")
         with col2:
             st.image(base64_to_image(r.get("image_after", "")), caption="DESPUÉS", width=200)
-            st.markdown(f"Edges: `{r.get('edges_after', 0):,}`")
+            st.markdown(f"Saturación visual: `{r.get('edges_after', 0):,}`")
         st.divider()
 
     with st.expander("🧨 Borrar todos los registros"):
