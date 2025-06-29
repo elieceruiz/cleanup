@@ -70,6 +70,7 @@ with tab1:
                 edges_after = last.get("edges_after", "?")
                 duration = last.get("duration_seconds", 0)
                 improved = last.get("improved", False)
+                fecha = last.get("start_time").astimezone(zona_col).strftime("%Y-%m-%d %H:%M")
 
                 st.subheader("🖼️ Imagen DESPUÉS")
                 st.image(image_after, width=300)
@@ -120,28 +121,60 @@ with tab1:
             st.error(f"❌ Error cargando sesión activa: {e}")
 
     else:
-        st.subheader("📤 Subí tu imagen inicial (ANTES)")
-        img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
-        if img_file:
+        last_closed = collection.find_one(
+            {"session_active": False, "image_after": {"$exists": True}},
+            sort=[("end_time", -1)]
+        )
+
+        if last_closed:
+            st.markdown("### ⚠️ No hay sesión activa. Última sesión completada:")
             try:
-                img = Image.open(img_file)
-                resized = resize_image(img)
-                score = simple_edge_score(resized)
-                img_b64 = image_to_base64(resized)
-                ts = datetime.now(zona_col)
+                image_before = base64_to_image(last_closed["image_base64"])
+                image_after = base64_to_image(last_closed["image_after"])
+                edges_before = last_closed.get("edges", "?")
+                edges_after = last_closed.get("edges_after", "?")
+                improved = last_closed.get("improved", False)
+                duration = last_closed.get("duration_seconds", 0)
+                fecha = last_closed.get("start_time").astimezone(zona_col).strftime("%Y-%m-%d %H:%M")
 
-                collection.insert_one({
-                    "session_active": True,
-                    "start_time": ts,
-                    "image_base64": img_b64,
-                    "edges": score
-                })
-
-                st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
-                st.rerun()
+                st.markdown(f"#### 🗓️ {fecha} — ⏱️ {duration} seg — {'✅ Mejora' if improved else '❌ Sin mejora'}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(image_before, caption="ANTES", width=250)
+                    st.markdown(f"**Edges:** {edges_before}")
+                with col2:
+                    st.image(image_after, caption="DESPUÉS", width=250)
+                    st.markdown(f"**Edges:** {edges_after}")
 
             except Exception as e:
-                st.error(f"❌ Error procesando imagen inicial: {e}")
+                st.error(f"❌ Error mostrando la última sesión cerrada: {e}")
+
+            if st.button("🔁 Iniciar nueva sesión"):
+                st.rerun()
+
+        else:
+            st.subheader("📤 Subí tu imagen inicial (ANTES)")
+            img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
+            if img_file:
+                try:
+                    img = Image.open(img_file)
+                    resized = resize_image(img)
+                    score = simple_edge_score(resized)
+                    img_b64 = image_to_base64(resized)
+                    ts = datetime.now(zona_col)
+
+                    collection.insert_one({
+                        "session_active": True,
+                        "start_time": ts,
+                        "image_base64": img_b64,
+                        "edges": score
+                    })
+
+                    st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Error procesando imagen inicial: {e}")
 
 # === TAB 2: HISTORIAL ===
 with tab2:
@@ -168,3 +201,10 @@ with tab2:
             with col2:
                 st.image(base64_to_image(r["image_after"]), caption="DESPUÉS", width=250)
                 st.markdown(f"**Edges:** {edges_after}")
+
+    # === Herramienta de desarrollo ===
+    with st.expander("🧨 Herramientas de desarrollo"):
+        if st.button("🗑️ Borrar todos los registros (MongoDB)"):
+            collection.delete_many({})
+            st.success("✅ Todos los registros han sido eliminados.")
+            st.rerun()
