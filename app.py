@@ -78,11 +78,11 @@ if (not last or not last.get("session_active")) and (
     st.session_state.last_check = datetime.now(timezone.utc)
     st.rerun()
 
-# === AUTORREFRESH: sincronización en tiempo real ===
+tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
+
+# === AUTORREFRESH: sincronización solo si hay sesión activa ===
 if last and last.get("session_active"):
     st_autorefresh(interval=1000, key="sincronizador_global")
-
-tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 
 with tabs[0]:
     st.markdown("""
@@ -169,7 +169,6 @@ with tabs[0]:
 
             st.subheader("📸 Sube la imagen del DESPUÉS")
             img_after_b64 = last.get("image_after")
-            # Si NO hay imagen guardada, muestra el uploader y procesa subida
             if not img_after_b64:
                 img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
                 st.caption("¡Muestra el resultado alcanzado!")
@@ -191,7 +190,7 @@ with tabs[0]:
                         )
                         if result.modified_count == 1:
                             st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
-                            # === Finaliza automáticamente la sesión cuando se sube la imagen del después ===
+                            # Finaliza automáticamente la sesión al subir el después
                             improved = edges_after < st.session_state.before_edges * 0.9
                             end_time = datetime.now(timezone.utc)
                             duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
