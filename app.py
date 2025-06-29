@@ -74,6 +74,13 @@ last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).re
 last = collection.find_one(sort=[("start_time", -1)])
 historial = collection.count_documents({"session_active": False})
 
+# === AUTORREFRESH: sincronización global SIEMPRE ===
+if not last or not last.get("session_active"):
+    st_autorefresh(interval=4000, key="sincronizador_idle")
+else:
+    st_autorefresh(interval=1000, key="sincronizador_global")
+
+# Sincronización para otros dispositivos cuando arranca/borran sesión
 if (not last or not last.get("session_active")) and (
     last_reset > st.session_state.last_check or last_session_start > st.session_state.last_check
 ):
@@ -81,9 +88,6 @@ if (not last or not last.get("session_active")) and (
     st.rerun()
 
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
-
-if last and last.get("session_active"):
-    st_autorefresh(interval=1000, key="sincronizador_global")
 
 with tabs[0]:
     st.markdown("""
@@ -96,6 +100,7 @@ with tabs[0]:
 
     st.divider()
 
+    # Si NO hay sesión activa
     if not last or not last.get("session_active"):
         st.info("No hay sesión activa. Sube una foto de ANTES para iniciar.")
         img_file = st.file_uploader("ANTES", type=["jpg", "jpeg", "png"], key="before_new")
@@ -124,10 +129,18 @@ with tabs[0]:
                 }},
                 upsert=True
             )
+            # Limpiar estado local para evitar reseteo/loop
+            st.session_state.start_time = None
+            st.session_state.img_before = None
+            st.session_state.before_edges = 0
+            st.session_state.session_id = None
+            st.session_state.ready = False
+            st.session_state.img_after_uploaded = None
             st.success("¡Sesión iniciada! Ahora sube la foto del después cuando termines.")
             st.rerun()
         st.stop()
 
+    # Si SÍ hay sesión activa
     mongo_session_id = str(last["_id"])
     local_session_id = str(st.session_state.session_id) if st.session_state.session_id else None
     if mongo_session_id != local_session_id:
@@ -157,61 +170,68 @@ with tabs[0]:
             img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
             st.caption("¡Muestra el resultado alcanzado!")
             if img_after_file is not None:
-                try:
-                    if not st.session_state.session_id:
-                        st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
-                        st.stop()
-                    img_after = Image.open(img_after_file)
-                    resized_after = resize_image(img_after)
-                    img_b64_after = image_to_base64(resized_after)
-                    edges_after = simple_edge_score(resized_after)
-                    result = collection.update_one(
-                        {"_id": st.session_state.session_id},
-                        {"$set": {
-                            "image_after": img_b64_after,
-                            "edges_after": edges_after
-                        }}
-                    )
-                    if result.modified_count == 1:
-                        improved = edges_after < st.session_state.before_edges * 0.9
-                        end_time = datetime.now(timezone.utc)
-                        duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
-                        # 1. Marcar la sesión como inactiva y guardar todo
-                        collection.update_one(
+                # Lanzar spinner y mensaje
+                with st.spinner("⏳ Registrando el resultado, por favor espera..."):
+                    try:
+                        st.info("⏳ Guardando resultado y sincronizando, no cierres la ventana...")
+                        if not st.session_state.session_id:
+                            st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
+                            st.stop()
+                        img_after = Image.open(img_after_file)
+                        resized_after = resize_image(img_after)
+                        img_b64_after = image_to_base64(resized_after)
+                        edges_after = simple_edge_score(resized_after)
+                        # Guardar imagen después
+                        result = collection.update_one(
                             {"_id": st.session_state.session_id},
                             {"$set": {
-                                "session_active": False,
-                                "end_time": end_time,
-                                "improved": improved,
-                                "duration_seconds": duration,
+                                "image_after": img_b64_after,
+                                "edges_after": edges_after
                             }}
                         )
-                        # 2. Actualizar el meta con el pellizco usando el MISMO end_time
-                        meta.update_one(
-                            {},
-                            {"$set": {
-                                "ultimo_pellizco": {
-                                    "user": st.session_state.user_login,
-                                    "datetime": end_time,
-                                    "mensaje": "Se subió el DESPUÉS y se mató la sesión"
-                                }
-                            }},
-                            upsert=True
-                        )
-                        # 3. Limpiar estado local y refrescar
-                        st.balloons()
-                        st.success("¡Sesión registrada exitosamente! 🎊")
-                        st.session_state.img_before = None
-                        st.session_state.ready = False
-                        st.session_state.start_time = None
-                        st.session_state.before_edges = 0
-                        st.rerun()
-                    else:
-                        st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
-                except Exception as e:
-                    import traceback
-                    st.error(f"Error al procesar o guardar la imagen: {e}")
-                    print(traceback.format_exc())
+                        if result.modified_count == 1:
+                            improved = edges_after < st.session_state.before_edges * 0.9
+                            end_time = datetime.now(timezone.utc)
+                            duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+                            # 1. Marcar la sesión como inactiva y guardar todo
+                            collection.update_one(
+                                {"_id": st.session_state.session_id},
+                                {"$set": {
+                                    "session_active": False,
+                                    "end_time": end_time,
+                                    "improved": improved,
+                                    "duration_seconds": duration,
+                                }}
+                            )
+                            # 2. Actualizar el meta con el pellizco usando el MISMO end_time
+                            meta.update_one(
+                                {},
+                                {"$set": {
+                                    "ultimo_pellizco": {
+                                        "user": st.session_state.user_login,
+                                        "datetime": end_time,
+                                        "mensaje": "Se subió el DESPUÉS y se mató la sesión"
+                                    }
+                                }},
+                                upsert=True
+                            )
+                            # 3. Limpiar estado local y refrescar
+                            st.session_state.start_time = None
+                            st.session_state.img_before = None
+                            st.session_state.before_edges = 0
+                            st.session_state.session_id = None
+                            st.session_state.ready = False
+                            st.session_state.img_after_uploaded = None
+                            st.success("¡Sesión registrada exitosamente! 🎊")
+                            st.balloons()
+                            st.info("👌 Resultado sincronizado. Puedes ver el historial o iniciar una nueva sesión.")
+                            st.rerun()
+                        else:
+                            st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
+                    except Exception as e:
+                        import traceback
+                        st.error(f"Error al procesar o guardar la imagen: {e}")
+                        print(traceback.format_exc())
         else:
             try:
                 st.image(base64_to_image(img_after_b64), caption="DESPUÉS (guardada)", width=320)
