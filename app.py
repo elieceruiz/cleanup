@@ -2,7 +2,7 @@ import streamlit as st
 from PIL import Image
 import io, base64
 import pymongo
-from datetime import datetime
+from datetime import datetime, timezone
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
@@ -16,7 +16,7 @@ zona_col = pytz.timezone("America/Bogota")
 
 # === INIT STATE ===
 if "last_check" not in st.session_state:
-    st.session_state.last_check = datetime.now()
+    st.session_state.last_check = datetime.now(timezone.utc)
 
 # === UTILS ===
 def resize_image(img, max_width=300):
@@ -52,11 +52,14 @@ with tab1:
     last = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
     historial = collection.count_documents({"session_active": False, "image_after": {"$exists": True}})
     meta_doc = meta.find_one({}) or {}
-    last_reset = meta_doc.get("last_reset", datetime(2000, 1, 1))
-    last_check = st.session_state.get("last_check", datetime(2000, 1, 1))
+    last_reset = meta_doc.get("last_reset", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
+    last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
+    last_check = st.session_state.get("last_check", datetime(2000, 1, 1)).replace(tzinfo=timezone.utc)
 
-    if not last and historial == 0 and last_reset > last_check:
-        st.session_state.last_check = datetime.now()
+    if (not last or not last.get("session_active")) and (
+        last_reset > last_check or last_session_start > last_check
+    ):
+        st.session_state.last_check = datetime.now(timezone.utc)
         st.rerun()
 
     if last:
@@ -181,7 +184,7 @@ with tab1:
                         "image_base64": img_b64,
                         "edges": score
                     })
-
+                    meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
                     st.success("✅ Imagen inicial cargada. Cronómetro iniciado.")
                     st.rerun()
 
@@ -218,6 +221,6 @@ with tab2:
     with st.expander("🧨 Herramientas de desarrollo"):
         if st.button("🗑️ Borrar todos los registros (MongoDB)"):
             collection.delete_many({})
-            meta.update_one({}, {"$set": {"last_reset": datetime.now()}}, upsert=True)
+            meta.update_one({}, {"$set": {"last_reset": datetime.now(timezone.utc)}}, upsert=True)
             st.success("✅ Todos los registros han sido eliminados.")
             st.rerun()
