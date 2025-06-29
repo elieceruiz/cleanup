@@ -14,10 +14,8 @@ db = client.cleanup
 collection = db.entries
 meta = db.meta
 
-# Timezones
 CO = pytz.timezone("America/Bogota")
 
-# === UTILS ===
 def resize_image(img: Image.Image, max_width=300) -> Image.Image:
     img = img.convert("RGB")
     w, h = img.size
@@ -73,24 +71,25 @@ last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).re
 last = collection.find_one(sort=[("start_time", -1)])
 historial = collection.count_documents({"session_active": False})
 
+# Si se reseteó o arrancó otra sesión desde otro dispositivo, sincroniza
 if (not last or not last.get("session_active")) and (
     last_reset > st.session_state.last_check or last_session_start > st.session_state.last_check
 ):
     st.session_state.last_check = datetime.now(timezone.utc)
     st.rerun()
 
-# === AUTORREFRESH ALTO: sincronía en todos los dispositivos ===
+# === AUTORREFRESH: sincronización en tiempo real ===
 if last and last.get("session_active"):
     st_autorefresh(interval=1000, key="sincronizador_global")
 
-# === FRONT ===
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 
 with tabs[0]:
     st.markdown("""
         <h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>
         <p style='text-align:center; color:#3a506b; font-size:1.2em;'>
-            Lleva el control visual y motivador de tus limpiezas. ¡Sube fotos de antes y después y observa cómo cambia la saturación visual del espacio!
+            Lleva el control visual y motivador de tus limpiezas. ¡Sube fotos de antes y después y observa cómo cambia la saturación visual del espacio!<br>
+            <span style="font-size:0.95em; color:#5f6f8c;">(La app se sincroniza en todos los dispositivos en tiempo real)</span>
         </p>
     """, unsafe_allow_html=True)
 
@@ -123,7 +122,7 @@ with tabs[0]:
 
     # === SESIÓN ACTIVA ===
     if last and last.get("session_active"):
-        # Sincronizar estado local
+        # Sincronizar estado local con lo que haya en Mongo
         mongo_session_id = str(last["_id"])
         local_session_id = str(st.session_state.session_id) if st.session_state.session_id else None
         if mongo_session_id != local_session_id:
@@ -192,9 +191,28 @@ with tabs[0]:
                         )
                         if result.modified_count == 1:
                             st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
+                            # === Finaliza automáticamente la sesión cuando se sube la imagen del después ===
+                            improved = edges_after < st.session_state.before_edges * 0.9
+                            end_time = datetime.now(timezone.utc)
+                            duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+                            collection.update_one(
+                                {"_id": st.session_state.session_id},
+                                {"$set": {
+                                    "session_active": False,
+                                    "end_time": end_time,
+                                    "improved": improved,
+                                    "duration_seconds": duration,
+                                }}
+                            )
+                            st.balloons()
+                            st.success("¡Sesión registrada exitosamente! 🎊")
+                            st.session_state.img_before = None
+                            st.session_state.ready = False
+                            st.session_state.start_time = None
+                            st.session_state.before_edges = 0
+                            st.rerun()
                         else:
                             st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
-                        st.rerun()
                     except Exception as e:
                         import traceback
                         st.error(f"Error al procesar o guardar la imagen: {e}")
@@ -208,30 +226,6 @@ with tabs[0]:
                 edges_after_val = last.get("edges_after")
                 if edges_after_val is not None:
                     st.markdown(f"**Saturación visual después:** `{edges_after_val:,}`")
-                if st.button("✅ Finalizar y comparar", use_container_width=True):
-                    img_after = base64_to_image(img_after_b64)
-                    resized_after = resize_image(img_after)
-                    edges_after = last.get("edges_after", simple_edge_score(resized_after))
-                    improved = edges_after < st.session_state.before_edges * 0.9
-                    end_time = datetime.now(timezone.utc)
-                    duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
-
-                    collection.update_one(
-                        {"_id": st.session_state.session_id},
-                        {"$set": {
-                            "session_active": False,
-                            "end_time": end_time,
-                            "improved": improved,
-                            "duration_seconds": duration,
-                        }}
-                    )
-                    st.balloons()
-                    st.success("¡Sesión registrada exitosamente! 🎊")
-                    st.session_state.img_before = None
-                    st.session_state.ready = False
-                    st.session_state.start_time = None
-                    st.session_state.before_edges = 0
-                    st.rerun()
             if not img_after_b64:
                 st.info("Sube una imagen del después para poder finalizar tu sesión.")
 
