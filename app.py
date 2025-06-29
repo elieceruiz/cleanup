@@ -1,166 +1,106 @@
-import streamlit as st
-from PIL import Image, ImageFilter
-import numpy as np
-from datetime import datetime, timedelta
-from pymongo import MongoClient
-from pytz import timezone
-import time
-import base64
-import io
-from streamlit_autorefresh import st_autorefresh
+import streamlit as st import pymongo from PIL import Image import io, base64 from datetime import datetime, timedelta import pytz
 
-# --- CONFIGURATION ---
-MONGO_URI = st.secrets["mongo_uri"]
-client = MongoClient(MONGO_URI)
-db = client["visual_cleanup"]
-collection = db["records"]
-CO = timezone("America/Bogota")
+st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 
-# --- EDGE DETECTION ---
-def count_edges(img: Image.Image) -> int:
-    gray = img.convert("L")
-    edges = gray.filter(ImageFilter.FIND_EDGES)
-    edge_array = np.array(edges)
-    return int(np.sum(edge_array > 50))
+MONGO_URI = st.secrets["mongo_uri"] client = pymongo.MongoClient(MONGO_URI) db = client.cleanup db_collection = db.entries
 
-# --- RESIZE IMAGE ---
-def resize_image(img: Image.Image, max_width=400) -> Image.Image:
-    w, h = img.size
-    if w > max_width:
-        ratio = max_width / w
-        return img.resize((int(w * ratio), int(h * ratio)))
-    return img
+CO = pytz.timezone("America/Bogota")
 
-# --- IMAGE TO BASE64 ---
-def image_to_base64(img: Image.Image) -> str:
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode()
+=== UTILS ===
 
-# --- BASE64 TO IMAGE ---
-def base64_to_image(b64_str: str) -> Image.Image:
-    return Image.open(io.BytesIO(base64.b64decode(b64_str)))
+def resize_image(img: Image.Image, max_width=300) -> Image.Image: img = img.convert("RGB") w, h = img.size if w > max_width: ratio = max_width / w img = img.resize((int(w * ratio), int(h * ratio))) return img
 
-# --- UI CONFIG ---
-st.set_page_config("Visual Cleanup", layout="centered")
+def image_to_base64(img: Image.Image) -> str: buffer = io.BytesIO() img.save(buffer, format="JPEG", quality=50, optimize=True) return base64.b64encode(buffer.getvalue()).decode()
+
+def base64_to_image(b64_str: str) -> Image.Image: return Image.open(io.BytesIO(base64.b64decode(b64_str)))
+
+def simple_edge_score(img: Image.Image) -> int: grayscale = img.convert("L") pixels = list(grayscale.getdata()) diffs = [abs(pixels[i] - pixels[i+1]) for i in range(len(pixels)-1)] return sum(d > 10 for d in diffs)
+
+=== FRONT ===
+
 st.title("🧹 Visual Cleanup")
 
-# --- SESSION INITIALIZATION ---
-if "start_time" not in st.session_state:
-    st.session_state.start_time = None
-if "before_edges" not in st.session_state:
-    st.session_state.before_edges = None
-if "img_before" not in st.session_state:
-    st.session_state.img_before = None
-if "img_after" not in st.session_state:
-    st.session_state.img_after = None
-if "history_offset" not in st.session_state:
-    st.session_state.history_offset = 0
+if "start_time" not in st.session_state: st.session_state.start_time = None
 
-# --- AUTOREFRESH TIMER IF RUNNING AND NO AFTER PHOTO YET ---
-if st.session_state.start_time and st.session_state.img_after is None:
-    st_autorefresh(interval=1000, key="refresh")
+if "img_before" not in st.session_state: st.session_state.img_before = None
 
-# --- STEP 1: Upload BEFORE photo ---
-if st.session_state.start_time is None:
-    before_file = st.file_uploader("Upload your BEFORE photo", type=["jpg", "png", "jpeg"])
-    if before_file:
-        img_before = Image.open(before_file)
-        st.session_state.img_before = img_before
-        st.session_state.before_edges = count_edges(img_before)
-        st.session_state.start_time = datetime.now(CO)
-        st.success("📸 BEFORE photo uploaded. Timer started. Now tidy up!")
-        st.image(img_before, caption="BEFORE", width=300)
-        st.rerun()
+if "before_edges" not in st.session_state: st.session_state.before_edges = 0
 
-# --- STEP 2: While timer is running ---
-elapsed = None
-if st.session_state.start_time:
-    elapsed = (datetime.now(CO) - st.session_state.start_time).seconds
-    minutes = elapsed // 60
-    seconds = elapsed % 60
-    st.info(f"⏱️ Time running: {minutes} min {seconds} sec")
-    st.image(st.session_state.img_before, caption="BEFORE", width=300)
+if st.session_state.start_time: delta = datetime.now() - st.session_state.start_time minutes, seconds = divmod(delta.total_seconds(), 60) st.markdown(f"⏱️ Time running: {int(minutes)} min {int(seconds)} sec")
 
-    if st.session_state.img_after is None:
-        after_file = st.file_uploader("Now upload your AFTER photo", type=["jpg", "png", "jpeg"], key="after")
-        if after_file:
-            st.session_state.img_after = Image.open(after_file)
-            st.rerun()
+=== PHOTO BEFORE ===
 
-    elif st.session_state.img_after is not None:
-        after_edges = count_edges(st.session_state.img_after)
+st.subheader("Upload BEFORE photo") img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
 
-        st.subheader("🔍 Analysis Result")
-        st.write(f"Edge pixels BEFORE: {st.session_state.before_edges:,}")
-        st.write(f"Edge pixels AFTER: {after_edges:,}")
+if img_file_before and not st.session_state.img_before: st.session_state.img_before = Image.open(img_file_before) st.session_state.start_time = datetime.now() resized = resize_image(st.session_state.img_before) st.session_state.before_edges = simple_edge_score(resized) st.rerun()
 
-        improved = after_edges < (st.session_state.before_edges * 0.9)
+if st.session_state.img_before: st.image(st.session_state.img_before, caption="BEFORE", width=300) st.markdown(f"Edges: {st.session_state.before_edges:,}")
 
-        if improved:
-            st.success("🎉 Well done! You were proactive and reduced visual clutter.")
-        else:
-            st.warning("No significant visual improvement detected. Try again.")
+=== PHOTO AFTER ===
 
-        # Resize images before saving
-        resized_before = resize_image(st.session_state.img_before)
-        resized_after = resize_image(st.session_state.img_after)
+st.subheader("Upload AFTER photo") img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
 
-        # Save to MongoDB
-        collection.insert_one({
-            "timestamp": datetime.now(CO),
-            "edges_before": st.session_state.before_edges,
-            "edges_after": after_edges,
-            "improved": improved,
-            "duration_seconds": elapsed,
-            "image_before": image_to_base64(resized_before),
-            "image_after": image_to_base64(resized_after)
-        })
+if img_file_after: img_after = Image.open(img_file_after) resized_after = resize_image(img_after) after_edges = simple_edge_score(resized_after)
 
-        st.balloons()
-        st.success("✅ Your cleanup session was saved.")
+duration = int((datetime.now() - st.session_state.start_time).total_seconds())
+improved = after_edges < (st.session_state.before_edges * 0.9)
 
-        # Clear session state
-        st.session_state.start_time = None
-        st.session_state.before_edges = None
-        st.session_state.img_before = None
-        st.session_state.img_after = None
-        st.rerun()
+img_b64_before = image_to_base64(resize_image(st.session_state.img_before))
+img_b64_after = image_to_base64(resized_after)
 
-# --- HISTORY ---
-st.divider()
+if len(img_b64_before) + len(img_b64_after) > 12_000_000:
+    st.warning("⚠️ Images too large to store. Try using lower resolution.")
+else:
+    db_collection.insert_one({
+        "timestamp": datetime.now(tz=CO),
+        "duration_seconds": duration,
+        "improved": improved,
+        "image_before": img_b64_before,
+        "image_after": img_b64_after,
+        "edges_before": st.session_state.before_edges,
+        "edges_after": after_edges,
+    })
+    st.success("✅ Action recorded!")
+
+# Reset session state
+st.session_state.start_time = None
+st.session_state.img_before = None
+st.session_state.before_edges = 0
+st.rerun()
+
+=== HISTORY ===
+
 st.subheader("📜 Action History")
 
-# Count sessions this week
-start_of_week = datetime.now(CO) - timedelta(days=datetime.now(CO).weekday())
-weekly_count = collection.count_documents({"timestamp": {"$gte": start_of_week}})
-st.info(f"🧮 You have completed {weekly_count} cleanup sessions this week.")
+week_ago = datetime.now(tz=CO) - timedelta(days=7) this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}}) st.markdown(f"✅ Sessions this week: {this_week_count}")
 
-# Paginate history
-limit = 5
-skip = st.session_state.history_offset
-records = list(collection.find().sort("timestamp", -1).skip(skip).limit(limit))
+records = list(db_collection.find().sort("timestamp", -1).limit(10))
 
-if records:
-    for r in records:
-        duration_m = r["duration_seconds"] // 60
-        st.write(f"🕒 {r['timestamp'].astimezone(CO).strftime('%Y-%m-%d %H:%M:%S')} — {duration_m} min — Improved: {'✅' if r['improved'] else '❌'}")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(base64_to_image(r["image_before"]), caption=f"BEFORE\n{r['edges_before']:,} edges", width=200)
-        with col2:
-            st.image(base64_to_image(r["image_after"]), caption=f"AFTER\n{r['edges_after']:,} edges", width=200)
+if not records: st.info("No entries yet.") else: if "page" not in st.session_state: st.session_state.page = 0
 
-    col_prev, col_next = st.columns(2)
-    with col_prev:
-        if st.session_state.history_offset >= limit:
-            if st.button("⬅️ Previous"):
-                st.session_state.history_offset -= limit
-                st.rerun()
-    with col_next:
-        if collection.count_documents({}) > skip + limit:
-            if st.button("Next ➡️"):
-                st.session_state.history_offset += limit
-                st.rerun()
-else:
-    st.info("No records yet.")
+start = st.session_state.page * 1
+end = start + 1
+
+for r in records[start:end]:
+    ts = r["timestamp"].astimezone(CO).strftime("%Y-%m-%d %H:%M:%S")
+    dur_m = r["duration_seconds"] // 60
+    st.write(f"🕒 {ts} — {dur_m} min — Improved: {'✅' if r['improved'] else '❌'}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(base64_to_image(r["image_before"]), caption="BEFORE", width=200)
+        st.markdown(f"**Edges:** {r['edges_before']:,}")
+    with col2:
+        st.image(base64_to_image(r["image_after"]), caption="AFTER", width=200)
+        st.markdown(f"**Edges:** {r['edges_after']:,}")
+
+col_prev, col_next = st.columns([1,1])
+with col_prev:
+    if st.button("⬅️ Previous") and st.session_state.page > 0:
+        st.session_state.page -= 1
+        st.rerun()
+with col_next:
+    if st.button("Next ➡️") and end < len(records):
+        st.session_state.page += 1
+        st.rerun()
+
