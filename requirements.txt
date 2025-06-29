@@ -3,3 +3,4 @@ pillow
 numpy
 pymongo
 pytz
+streamlit-autorefresh
