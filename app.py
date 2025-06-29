@@ -44,9 +44,11 @@ if "before_edges" not in st.session_state:
     st.session_state.before_edges = None
 if "img_before" not in st.session_state:
     st.session_state.img_before = None
+if "img_after" not in st.session_state:
+    st.session_state.img_after = None
 
-# --- AUTOREFRESH TIMER IF RUNNING ---
-if st.session_state.start_time:
+# --- AUTOREFRESH TIMER IF RUNNING AND NO AFTER PHOTO YET ---
+if st.session_state.start_time and st.session_state.img_after is None:
     st_autorefresh(interval=1000, key="refresh")
 
 # --- STEP 1: Upload BEFORE photo ---
@@ -59,7 +61,7 @@ if st.session_state.start_time is None:
         st.session_state.start_time = datetime.now(CO)
         st.success("📸 BEFORE photo uploaded. Timer started. Now tidy up!")
         st.image(img_before, caption="BEFORE", width=300)
-        st.rerun()
+        st.experimental_rerun()
 
 # --- STEP 2: While timer is running ---
 elapsed = None
@@ -69,11 +71,15 @@ if st.session_state.start_time:
     seconds = elapsed % 60
     st.info(f"⏱️ Time running: {minutes} min {seconds} sec")
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
-    after_file = st.file_uploader("Now upload your AFTER photo", type=["jpg", "png", "jpeg"], key="after")
 
-    if after_file:
-        img_after = Image.open(after_file)
-        after_edges = count_edges(img_after)
+    if st.session_state.img_after is None:
+        after_file = st.file_uploader("Now upload your AFTER photo", type=["jpg", "png", "jpeg"], key="after")
+        if after_file:
+            st.session_state.img_after = Image.open(after_file)
+            st.experimental_rerun()
+
+    elif st.session_state.img_after is not None:
+        after_edges = count_edges(st.session_state.img_after)
 
         st.subheader("🔍 Analysis Result")
         st.write(f"Edge pixels BEFORE: {st.session_state.before_edges:,}")
@@ -94,16 +100,18 @@ if st.session_state.start_time:
             "improved": improved,
             "duration_seconds": elapsed,
             "image_before": image_to_base64(st.session_state.img_before),
-            "image_after": image_to_base64(img_after)
+            "image_after": image_to_base64(st.session_state.img_after)
         })
 
         st.balloons()
         st.success("✅ Your cleanup session was saved.")
 
+        # Clear session state
         st.session_state.start_time = None
         st.session_state.before_edges = None
         st.session_state.img_before = None
-        st.rerun()
+        st.session_state.img_after = None
+        st.experimental_rerun()
 
 # --- HISTORY ---
 st.divider()
