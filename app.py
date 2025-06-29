@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 import getpass
 from bson import ObjectId
 
-# CONFIG
+# === CONFIG ===
 st.set_page_config(page_title="🧹 Visualizador de Limpieza", layout="centered")
 MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
@@ -53,15 +53,17 @@ if "user_login" not in st.session_state:
         st.experimental_user.get("username") if hasattr(st, "experimental_user") else getpass.getuser()
     )
 
-# SYNC
+# === SYNC ===
 meta_doc = meta.find_one({}) or {}
 last = collection.find_one(sort=[("start_time", -1)])
+
 if not last or not last.get("session_active"):
     st_autorefresh(interval=4000, key="sincronizador_idle")
 else:
     st_autorefresh(interval=1000, key="sincronizador_global")
 
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
+
 with tabs[0]:
     st.markdown("<h1 style='text-align:center; color:#2b7a78;'>🧹 Visualizador de Limpieza</h1>", unsafe_allow_html=True)
     st.divider()
@@ -108,14 +110,15 @@ with tabs[0]:
     st.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed.total_seconds()))}</code>", unsafe_allow_html=True)
     st.divider()
 
-    # BOTÓN DE PARAR
+    # BOTÓN DE PARAR CON DEPURACIÓN
     if last.get("session_active"):
         if st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True):
             with st.spinner("Finalizando sesión y sincronizando..."):
                 end_time = datetime.now(timezone.utc)
                 duration = int((end_time - last["start_time"].replace(tzinfo=None)).total_seconds())
+                st.info(f"Intentando actualizar session_id: {last['_id']} (tipo: {type(last['_id'])})")
                 result = collection.update_one(
-                    {"_id": ObjectId(str(session_id)), "session_active": True},
+                    {"_id": last["_id"], "session_active": True},
                     {"$set": {
                         "session_active": False,
                         "end_time": end_time,
@@ -123,6 +126,7 @@ with tabs[0]:
                         "improved": None
                     }}
                 )
+                st.info(f"update_one result: matched={result.matched_count}, modified={result.modified_count}")
                 meta.update_one(
                     {}, {"$set": {
                         "ultimo_pellizco": {
@@ -132,8 +136,12 @@ with tabs[0]:
                         }
                     }}, upsert=True
                 )
-                st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
-                st.rerun()
+                if result.modified_count == 1:
+                    st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
+                    st.rerun()
+                else:
+                    st.error(f"No se pudo finalizar la sesión. session_active sigue en True. session_id: {last['_id']}")
+                    st.stop()
 
     # SUBIDA DEL DESPUÉS
     last = collection.find_one(sort=[("start_time", -1)])
