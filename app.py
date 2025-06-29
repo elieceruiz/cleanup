@@ -40,14 +40,14 @@ def simple_edge_score(img: Image.Image) -> int:
     return sum(d > 10 for d in diffs)
 
 # ==== INICIALIZACIÓN DE ESTADO ====
-st.set_page_config(page_title="🧪 Cleanup Test", layout="centered")
+st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 st.title("🧹 Cleanup Test con Edge Score")
 
-for k in ["start_time", "image", "edges", "session_id", "after_uploaded"]:
+for k in ["start_time", "image", "edges", "session_id"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
-# ==== RECUPERAR SESIÓN ACTIVA SI EXISTE ====
+# ==== RECUPERAR SESIÓN ACTIVA DESDE MONGO SI EXISTE ====
 if st.session_state.start_time is None or st.session_state.image is None:
     last_active = collection.find_one({"session_active": True}, sort=[("start_time", -1)])
     if last_active:
@@ -59,7 +59,7 @@ if st.session_state.start_time is None or st.session_state.image is None:
         except Exception as e:
             st.warning(f"No se pudo restaurar la sesión: {e}")
 
-# ==== MOSTRAR SESIÓN ACTIVA ====
+# ==== SI HAY SESIÓN ACTIVA ====
 if st.session_state.image:
     st.image(st.session_state.image, caption="🖼️ Imagen ANTES", width=300)
     st.markdown(f"**Edges ANTES:** `{st.session_state.edges}`")
@@ -69,47 +69,49 @@ if st.session_state.image:
     minutes, seconds = divmod(elapsed.total_seconds(), 60)
     st.markdown(f"### ⏱️ Tiempo activo: **{int(minutes)} min {int(seconds)} sec**")
 
-    # ==== SUBIR IMAGEN DESPUÉS ====
+    # ==== SUBIDA Y COMPARACIÓN DE IMAGEN DESPUÉS ====
     st.subheader("📸 Sube la imagen DESPUÉS")
     img_file_after = st.file_uploader("Después", type=["jpg", "jpeg", "png"], key="after")
 
-    if img_file_after and st.button("🟣 Finalizar y comparar"):
+    if img_file_after:
         try:
             img_after = Image.open(img_file_after)
             resized_after = resize_image(img_after)
             score_after = simple_edge_score(resized_after)
-            img_b64_after = image_to_base64(resized_after)
-
-            duration = int((datetime.now(zona_col) - st.session_state.start_time).total_seconds())
-            improved = score_after < st.session_state.edges
-
-            collection.update_one(
-                {"_id": st.session_state.session_id},
-                {"$set": {
-                    "session_active": False,
-                    "end_time": datetime.now(zona_col),
-                    "duration_seconds": duration,
-                    "image_after": img_b64_after,
-                    "edges_after": score_after,
-                    "improved": improved
-                }}
-            )
-
             st.image(resized_after, caption="🖼️ Imagen DESPUÉS", width=300)
             st.markdown(f"**Edges DESPUÉS:** `{score_after}`")
 
-            if improved:
-                st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
-            else:
-                st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
+            if st.button("🟣 Finalizar y comparar"):
+                duration = int((datetime.now(zona_col) - st.session_state.start_time).total_seconds())
+                improved = score_after < st.session_state.edges
+                img_b64_after = image_to_base64(resized_after)
 
-            # Reset sesión local
-            for k in ["start_time", "image", "edges", "session_id"]:
-                st.session_state[k] = None
+                collection.update_one(
+                    {"_id": st.session_state.session_id},
+                    {"$set": {
+                        "session_active": False,
+                        "end_time": datetime.now(zona_col),
+                        "duration_seconds": duration,
+                        "image_after": img_b64_after,
+                        "edges_after": score_after,
+                        "improved": improved
+                    }}
+                )
+
+                if improved:
+                    st.success("✅ Hubo mejora: la segunda imagen tiene menos bordes.")
+                else:
+                    st.warning("❌ No hubo mejora: los bordes no disminuyeron.")
+
+                st.markdown("---")
+                st.info("🔄 Reiniciando para una nueva sesión...")
+                st.session_state.clear()
+                st.rerun()
+
         except Exception as e:
             st.error(f"❌ Error procesando la imagen después: {e}")
 
-# ==== SI NO HAY SESIÓN ACTIVA: PERMITIR NUEVA ====
+# ==== SI NO HAY SESIÓN ACTIVA, SUBIR IMAGEN ANTES ====
 else:
     st.subheader("📤 Sube una imagen inicial")
     img_file = st.file_uploader("Antes", type=["jpg", "jpeg", "png"])
