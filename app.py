@@ -4,6 +4,7 @@ from PIL import Image
 import io, base64
 from datetime import datetime, timedelta
 import pytz
+import time
 
 st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 
@@ -55,7 +56,7 @@ if "ready" not in st.session_state:
 # === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
-    img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"], key="before")
+    img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
     if img_file_before:
         st.session_state.img_before = Image.open(img_file_before)
         st.session_state.start_time = datetime.now()
@@ -69,9 +70,17 @@ if st.session_state.ready and st.session_state.img_before:
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
-    delta = datetime.now() - st.session_state.start_time
-    minutes, seconds = divmod(delta.total_seconds(), 60)
-    st.markdown(f"⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
+    placeholder = st.empty()
+    stop_flag = False
+    start = datetime.now()
+
+    while not stop_flag:
+        delta = datetime.now() - st.session_state.start_time
+        minutes, seconds = divmod(delta.total_seconds(), 60)
+        placeholder.markdown(f"### ⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
+        time.sleep(1)
+        if "img_after" in st.session_state:
+            break
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
@@ -106,12 +115,11 @@ if st.session_state.ready and st.session_state.img_before:
                 st.error(f"❌ Failed to save entry: {e}")
                 st.stop()
 
-        # Reset session state BEFORE rerun
+        # Reset session state
         st.session_state.start_time = None
         st.session_state.img_before = None
         st.session_state.before_edges = 0
         st.session_state.ready = False
-        st.session_state["after"] = None
         st.rerun()
 
 # === HISTORY ===
@@ -119,7 +127,7 @@ st.subheader("📜 Action History")
 
 week_ago = datetime.now(tz=CO) - timedelta(days=7)
 this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}})
-st.markdown(f"**✅ Sessions this week: {this_week_count}**")
+st.markdown(f"**✅ Sessions this week:** {this_week_count}")
 
 records = list(db_collection.find().sort("timestamp", -1).limit(10))
 
@@ -145,13 +153,12 @@ else:
             st.image(base64_to_image(r["image_after"]), caption="AFTER", width=200)
             st.markdown(f"**Edges:** {r['edges_after']:,}")
 
-    col_prev, col_next = st.columns([1, 1])
-    prev_clicked = col_prev.button("⬅️ Previous")
-    next_clicked = col_next.button("Next ➡️")
-
-    if prev_clicked and st.session_state.page > 0:
-        st.session_state.page -= 1
-        st.rerun()
-    elif next_clicked and end < len(records):
-        st.session_state.page += 1
-        st.rerun()
+    col_prev, col_next = st.columns(2)
+    with col_prev:
+        if st.button("⬅️ Previous") and st.session_state.page > 0:
+            st.session_state.page -= 1
+            st.rerun()
+    with col_next:
+        if st.button("Next ➡️") and end < len(records):
+            st.session_state.page += 1
+            st.rerun()
