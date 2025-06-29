@@ -49,65 +49,69 @@ if "img_before" not in st.session_state:
 if "before_edges" not in st.session_state:
     st.session_state.before_edges = 0
 
-if st.session_state.start_time:
-    delta = datetime.now() - st.session_state.start_time
-    minutes, seconds = divmod(delta.total_seconds(), 60)
-    st.markdown(f"⏱️ Time running: {int(minutes)} min {int(seconds)} sec")
+if "ready" not in st.session_state:
+    st.session_state.ready = False
 
 # === PHOTO BEFORE ===
-st.subheader("Upload BEFORE photo")
-img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
+if not st.session_state.img_before:
+    st.subheader("Upload BEFORE photo")
+    img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
+    if img_file_before:
+        st.session_state.img_before = Image.open(img_file_before)
+        st.session_state.start_time = datetime.now()
+        resized = resize_image(st.session_state.img_before)
+        st.session_state.before_edges = simple_edge_score(resized)
+        st.session_state.ready = True
+        st.rerun()
 
-if img_file_before and not st.session_state.img_before:
-    st.session_state.img_before = Image.open(img_file_before)
-    st.session_state.start_time = datetime.now()
-    resized = resize_image(st.session_state.img_before)
-    st.session_state.before_edges = simple_edge_score(resized)
-    st.rerun()
-
-if st.session_state.img_before:
+# === IF BEFORE EXISTS ===
+if st.session_state.ready and st.session_state.img_before:
     st.image(st.session_state.img_before, caption="BEFORE", width=300)
     st.markdown(f"**Edges:** {st.session_state.before_edges:,}")
 
-# === PHOTO AFTER ===
-st.subheader("Upload AFTER photo")
-img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
+    delta = datetime.now() - st.session_state.start_time
+    minutes, seconds = divmod(delta.total_seconds(), 60)
+    st.markdown(f"⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
 
-if img_file_after:
-    img_after = Image.open(img_file_after)
-    resized_after = resize_image(img_after)
-    after_edges = simple_edge_score(resized_after)
+    st.subheader("Upload AFTER photo")
+    img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
 
-    duration = int((datetime.now() - st.session_state.start_time).total_seconds())
-    improved = after_edges < (st.session_state.before_edges * 0.9)
+    if img_file_after:
+        img_after = Image.open(img_file_after)
+        resized_after = resize_image(img_after)
+        after_edges = simple_edge_score(resized_after)
 
-    img_b64_before = image_to_base64(resize_image(st.session_state.img_before))
-    img_b64_after = image_to_base64(resized_after)
+        duration = int((datetime.now() - st.session_state.start_time).total_seconds())
+        improved = after_edges < (st.session_state.before_edges * 0.9)
 
-    if len(img_b64_before) + len(img_b64_after) > 12_000_000:
-        st.warning("⚠️ Images too large to store. Try using lower resolution.")
-    else:
-        try:
-            db_collection.insert_one({
-                "timestamp": datetime.now(tz=CO),
-                "duration_seconds": duration,
-                "improved": improved,
-                "image_before": img_b64_before,
-                "image_after": img_b64_after,
-                "edges_before": st.session_state.before_edges,
-                "edges_after": after_edges,
-            })
-            st.success("✅ Action recorded!")
-            st.write("📝 Entry successfully saved to MongoDB.")
-        except Exception as e:
-            st.error(f"❌ Failed to save entry: {e}")
-            st.stop()
+        img_b64_before = image_to_base64(resize_image(st.session_state.img_before))
+        img_b64_after = image_to_base64(resized_after)
 
-    # Reset session state
-    st.session_state.start_time = None
-    st.session_state.img_before = None
-    st.session_state.before_edges = 0
-    st.rerun()
+        if len(img_b64_before) + len(img_b64_after) > 12_000_000:
+            st.warning("⚠️ Images too large to store. Try using lower resolution.")
+        else:
+            try:
+                db_collection.insert_one({
+                    "timestamp": datetime.now(tz=CO),
+                    "duration_seconds": duration,
+                    "improved": improved,
+                    "image_before": img_b64_before,
+                    "image_after": img_b64_after,
+                    "edges_before": st.session_state.before_edges,
+                    "edges_after": after_edges,
+                })
+                st.success("✅ Action recorded!")
+                st.write("📝 Entry successfully saved to MongoDB.")
+            except Exception as e:
+                st.error(f"❌ Failed to save entry: {e}")
+                st.stop()
+
+        # Reset session state
+        st.session_state.start_time = None
+        st.session_state.img_before = None
+        st.session_state.before_edges = 0
+        st.session_state.ready = False
+        st.rerun()
 
 # === HISTORY ===
 st.subheader("📜 Action History")
@@ -117,6 +121,7 @@ this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}
 st.markdown(f"**✅ Sessions this week:** {this_week_count}")
 
 records = list(db_collection.find().sort("timestamp", -1).limit(10))
+st.write("📋 Retrieved Records:", records)
 
 if not records:
     st.info("No entries yet.")
