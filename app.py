@@ -97,13 +97,13 @@ with tabs[0]:
                 st.image(base64_to_image(latest.get("image_after", "")), caption="DESPUÉS", width=250)
                 st.markdown(f"Edges: {latest.get('edges_after', 0):,}")
         if st.button("🔁 Iniciar nueva sesión"):
-    st.session_state.clear()
-    collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
-    meta.update_one(
-        {},
-        {"$set": {"last_session_start": datetime.now(timezone.utc)}},
-        upsert=True
-    )
+            st.session_state.clear()
+            collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
+            meta.update_one(
+                {},
+                {"$set": {"last_session_start": datetime.now(timezone.utc)}},
+                upsert=True
+            )
     st.rerun()
     st.session_state.clear()
     collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
@@ -116,15 +116,11 @@ with tabs[0]:
     collection.update_many({"session_active": True}, {"$set": {"session_active": False}})
 
     # Actualizar 'meta' para forzar sincronización
-    meta.update_one(
-        {},
-        {"$set": {"last_session_start": datetime.now(timezone.utc)}},
-        upsert=True
-    )
+    meta.update_one({},{"$set": {"last_session_start": datetime.now(timezone.utc)}},upsert=True)
 
     # Recargar la App para reflejar el reinicio
     st.rerun()
-        st.stop()
+    st.stop()
 
     # === SESIÓN ACTIVA ===
     if not st.session_state.img_before:
@@ -147,6 +143,7 @@ with tabs[0]:
                 "image_base64": img_b64,
                 "edges": edges,
             })
+            
             st.session_state.session_id = result.inserted_id
             meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
             st.rerun()
@@ -188,7 +185,7 @@ with tabs[0]:
             st.session_state.before_edges = 0
             st.rerun()
 
-with tabs[1]:
+with tab[1]:
     st.title("📜 Historial")
     registros = list(collection.find({"session_active": False}).sort("start_time", -1).limit(10))
     for r in registros:
