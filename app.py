@@ -8,6 +8,9 @@ import time
 
 st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=1000, key="cronometro")
+
 MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
 db = client.cleanup
