@@ -1,10 +1,9 @@
 import streamlit as st
-import cv2
+from PIL import Image, ImageFilter
 import numpy as np
-import tempfile
-import time
 from datetime import datetime
 from pymongo import MongoClient
+import io
 
 # --- CONFIGURACIÓN ---
 MONGO_URI = st.secrets["mongo_uri"]
@@ -12,11 +11,13 @@ client = MongoClient(MONGO_URI)
 db = client["ordenador_visual"]
 coleccion = db["registros"]
 
-# --- FUNCIÓN DE DETECCIÓN SIMPLIFICADA ---
-def detectar_bordes(imagen):
-    gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
-    bordes = cv2.Canny(gris, 100, 200)
-    return bordes
+# --- DETECCIÓN DE BORDES SIN OPENCV ---
+def contar_bordes(img: Image.Image) -> int:
+    gris = img.convert("L")  # Escala de grises
+    bordes = gris.filter(ImageFilter.FIND_EDGES)
+    np_bordes = np.array(bordes)
+    cantidad = np.sum(np_bordes > 50)  # Umbral básico
+    return cantidad
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config("Ordenador Visual", layout="centered")
@@ -32,17 +33,11 @@ with col2:
     despues_file = st.file_uploader("Foto DESPUÉS", type=["jpg", "png", "jpeg"], key="despues")
 
 if antes_file and despues_file:
-    # Cargar imágenes
-    img_antes = cv2.imdecode(np.frombuffer(antes_file.read(), np.uint8), 1)
-    img_despues = cv2.imdecode(np.frombuffer(despues_file.read(), np.uint8), 1)
+    img_antes = Image.open(antes_file)
+    img_despues = Image.open(despues_file)
 
-    # Detectar bordes como proxy visual del desorden
-    bordes_antes = detectar_bordes(img_antes)
-    bordes_despues = detectar_bordes(img_despues)
-
-    # Comparar cantidad de bordes
-    conteo_antes = np.sum(bordes_antes > 0)
-    conteo_despues = np.sum(bordes_despues > 0)
+    conteo_antes = contar_bordes(img_antes)
+    conteo_despues = contar_bordes(img_despues)
 
     st.subheader("Resultado")
     mejora = conteo_despues < conteo_antes
@@ -63,7 +58,6 @@ if antes_file and despues_file:
     else:
         st.warning("No se detecta mejora visual. Intenta otra vez o revisa las fotos.")
 
-    # Mostrar imágenes
     st.image([img_antes, img_despues], caption=["ANTES", "DESPUÉS"], width=300)
 
 # Mostrar historial
