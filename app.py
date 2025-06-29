@@ -5,6 +5,7 @@ import io, base64
 from datetime import datetime, timezone
 import pytz
 from streamlit_autorefresh import st_autorefresh
+import getpass
 
 # === CONFIG ===
 st.set_page_config(page_title="🧹 Visualizador de Limpieza", layout="centered")
@@ -63,6 +64,8 @@ if "last_check" not in st.session_state:
     st.session_state.last_check = datetime(2000, 1, 1, tzinfo=timezone.utc)
 if "img_after_uploaded" not in st.session_state:
     st.session_state.img_after_uploaded = None
+if "user_login" not in st.session_state:
+    st.session_state.user_login = st.experimental_user.get("username") if hasattr(st, "experimental_user") else getpass.getuser()
 
 # === SYNC META ===
 meta_doc = meta.find_one({}) or {}
@@ -111,7 +114,19 @@ with tabs[0]:
                 "image_base64": img_b64,
                 "edges": edges,
             })
-            meta.update_one({}, {"$set": {"last_session_start": datetime.now(timezone.utc)}}, upsert=True)
+            # Registrar el "pellizco" en meta
+            meta.update_one(
+                {},
+                {"$set": {
+                    "last_session_start": datetime.now(timezone.utc),
+                    "ultimo_pellizco": {
+                        "user": st.session_state.user_login,
+                        "datetime": datetime.now(timezone.utc),
+                        "mensaje": "Se subió el ANTES"
+                    }
+                }},
+                upsert=True
+            )
             st.success("¡Sesión iniciada! Ahora sube la foto del después cuando termines.")
             st.rerun()
         st.stop()
@@ -141,6 +156,10 @@ with tabs[0]:
         st.subheader("📸 Sube la imagen del DESPUÉS")
         img_after_b64 = last.get("image_after")
         if not img_after_b64:
+            # Mostrar mensaje de sincronización si en otro dispositivo subieron el antes
+            if last and last.get("session_active") and last.get("image_base64") and last.get("image_after") is None:
+                st.info("Sesión activa. Si subiste la foto del ANTES desde otro dispositivo, puedes continuar aquí subiendo el DESPUÉS.")
+
             img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
             st.caption("¡Muestra el resultado alcanzado!")
             if img_after_file is not None:
@@ -172,6 +191,18 @@ with tabs[0]:
                                 "improved": improved,
                                 "duration_seconds": duration,
                             }}
+                        )
+                        # Registrar en meta que se subió el DESPUÉS
+                        meta.update_one(
+                            {},
+                            {"$set": {
+                                "ultimo_pellizco": {
+                                    "user": st.session_state.user_login,
+                                    "datetime": datetime.now(timezone.utc),
+                                    "mensaje": "Se subió el DESPUÉS"
+                                }
+                            }},
+                            upsert=True
                         )
                         st.balloons()
                         st.success("¡Sesión registrada exitosamente! 🎊")
@@ -249,3 +280,14 @@ with tabs[1]:
             meta.update_one({}, {"$set": {"last_reset": datetime.now(timezone.utc)}}, upsert=True)
             st.success("Registros eliminados.")
             st.rerun()
+
+    with st.expander("Meta de sincronización (debug)", expanded=False):
+        meta_doc = meta.find_one({})
+        st.write(meta_doc)
+        if meta_doc and "ultimo_pellizco" in meta_doc:
+            info_user = meta_doc["ultimo_pellizco"].get("user", "¿desconocido?")
+            info_dt = meta_doc["ultimo_pellizco"].get("datetime")
+            info_msg = meta_doc["ultimo_pellizco"].get("mensaje", "")
+            st.info(
+                f"Última acción meta: **{info_msg}** por **{info_user}** el `{info_dt}`"
+            )
