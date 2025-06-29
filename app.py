@@ -74,7 +74,6 @@ last_session_start = meta_doc.get("last_session_start", datetime(2000, 1, 1)).re
 last = collection.find_one(sort=[("start_time", -1)])
 historial = collection.count_documents({"session_active": False})
 
-# Si se reseteó o arrancó otra sesión desde otro dispositivo, sincroniza
 if (not last or not last.get("session_active")) and (
     last_reset > st.session_state.last_check or last_session_start > st.session_state.last_check
 ):
@@ -83,7 +82,6 @@ if (not last or not last.get("session_active")) and (
 
 tabs = st.tabs(["✨ Sesión Actual", "🗂️ Historial"])
 
-# === AUTORREFRESH: sincronización solo si hay sesión activa ===
 if last and last.get("session_active"):
     st_autorefresh(interval=1000, key="sincronizador_global")
 
@@ -98,7 +96,6 @@ with tabs[0]:
 
     st.divider()
 
-    # --- Si NO hay sesión activa, muestra solo el uploader de "ANTES" ---
     if not last or not last.get("session_active"):
         st.info("No hay sesión activa. Sube una foto de ANTES para iniciar.")
         img_file = st.file_uploader("ANTES", type=["jpg", "jpeg", "png"], key="before_new")
@@ -108,20 +105,20 @@ with tabs[0]:
             resized = resize_image(img)
             img_b64 = image_to_base64(resized)
             edges = simple_edge_score(resized)
+            now_utc = datetime.now(timezone.utc)
             result = collection.insert_one({
                 "session_active": True,
-                "start_time": datetime.now(timezone.utc),
+                "start_time": now_utc,
                 "image_base64": img_b64,
                 "edges": edges,
             })
-            # Registrar el "pellizco" en meta
             meta.update_one(
                 {},
                 {"$set": {
-                    "last_session_start": datetime.now(timezone.utc),
+                    "last_session_start": now_utc,
                     "ultimo_pellizco": {
                         "user": st.session_state.user_login,
-                        "datetime": datetime.now(timezone.utc),
+                        "datetime": now_utc,
                         "mensaje": "Se subió el ANTES"
                     }
                 }},
@@ -131,7 +128,6 @@ with tabs[0]:
             st.rerun()
         st.stop()
 
-    # --- Si SÍ hay sesión activa, muestra el flujo activo ---
     mongo_session_id = str(last["_id"])
     local_session_id = str(st.session_state.session_id) if st.session_state.session_id else None
     if mongo_session_id != local_session_id:
@@ -156,10 +152,8 @@ with tabs[0]:
         st.subheader("📸 Sube la imagen del DESPUÉS")
         img_after_b64 = last.get("image_after")
         if not img_after_b64:
-            # Mostrar mensaje de sincronización si en otro dispositivo subieron el antes
             if last and last.get("session_active") and last.get("image_base64") and last.get("image_after") is None:
                 st.info("Sesión activa. Si subiste la foto del ANTES desde otro dispositivo, puedes continuar aquí subiendo el DESPUÉS.")
-
             img_after_file = st.file_uploader("DESPUÉS", type=["jpg", "jpeg", "png"], key="after", label_visibility="visible")
             st.caption("¡Muestra el resultado alcanzado!")
             if img_after_file is not None:
@@ -179,10 +173,10 @@ with tabs[0]:
                         }}
                     )
                     if result.modified_count == 1:
-                        st.success(f"Imagen y saturación visual guardadas correctamente ({edges_after:,}).")
                         improved = edges_after < st.session_state.before_edges * 0.9
                         end_time = datetime.now(timezone.utc)
                         duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
+                        # 1. Marcar la sesión como inactiva y guardar todo
                         collection.update_one(
                             {"_id": st.session_state.session_id},
                             {"$set": {
@@ -192,18 +186,19 @@ with tabs[0]:
                                 "duration_seconds": duration,
                             }}
                         )
-                        # Registrar en meta que se subió el DESPUÉS
+                        # 2. Actualizar el meta con el pellizco usando el MISMO end_time
                         meta.update_one(
                             {},
                             {"$set": {
                                 "ultimo_pellizco": {
                                     "user": st.session_state.user_login,
-                                    "datetime": datetime.now(timezone.utc),
-                                    "mensaje": "Se subió el DESPUÉS"
+                                    "datetime": end_time,
+                                    "mensaje": "Se subió el DESPUÉS y se mató la sesión"
                                 }
                             }},
                             upsert=True
                         )
+                        # 3. Limpiar estado local y refrescar
                         st.balloons()
                         st.success("¡Sesión registrada exitosamente! 🎊")
                         st.session_state.img_before = None
@@ -276,8 +271,9 @@ with tabs[1]:
     with st.expander("🧨 Borrar todos los registros"):
         st.warning("¡Esta acción eliminará todo el historial! No se puede deshacer.")
         if st.button("🗑️ Borrar todo", use_container_width=True):
+            now_utc = datetime.now(timezone.utc)
             collection.delete_many({})
-            meta.update_one({}, {"$set": {"last_reset": datetime.now(timezone.utc)}}, upsert=True)
+            meta.update_one({}, {"$set": {"last_reset": now_utc}}, upsert=True)
             st.success("Registros eliminados.")
             st.rerun()
 
