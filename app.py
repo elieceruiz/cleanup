@@ -4,7 +4,6 @@ from PIL import Image
 import io, base64
 from datetime import datetime, timedelta
 import pytz
-from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="🧹 Visual Cleanup", layout="centered")
 
@@ -53,15 +52,10 @@ if "before_edges" not in st.session_state:
 if "ready" not in st.session_state:
     st.session_state.ready = False
 
-# Refresh if timer is running
-if st.session_state.ready and st.session_state.start_time:
-    st_autorefresh(interval=1000, key="refresh_timer")
-
 # === PHOTO BEFORE ===
 if not st.session_state.img_before:
     st.subheader("Upload BEFORE photo")
-    img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"])
-    st.caption("⚠️ Actual limit: ~6MB per image due to database constraints.")
+    img_file_before = st.file_uploader("Before", type=["jpg", "jpeg", "png"], key="before")
     if img_file_before:
         st.session_state.img_before = Image.open(img_file_before)
         st.session_state.start_time = datetime.now()
@@ -77,11 +71,10 @@ if st.session_state.ready and st.session_state.img_before:
 
     delta = datetime.now() - st.session_state.start_time
     minutes, seconds = divmod(delta.total_seconds(), 60)
-    st.markdown(f"<h2 style='color:orange;'>⏱️ Time running: {int(minutes)} min {int(seconds)} sec</h2>", unsafe_allow_html=True)
+    st.markdown(f"⏱️ Time running: **{int(minutes)} min {int(seconds)} sec**")
 
     st.subheader("Upload AFTER photo")
     img_file_after = st.file_uploader("After", type=["jpg", "jpeg", "png"], key="after")
-    st.caption("⚠️ Actual limit: ~6MB per image due to database constraints.")
 
     if img_file_after:
         img_after = Image.open(img_file_after)
@@ -113,11 +106,12 @@ if st.session_state.ready and st.session_state.img_before:
                 st.error(f"❌ Failed to save entry: {e}")
                 st.stop()
 
-        # Reset session state
+        # Reset session state BEFORE rerun
         st.session_state.start_time = None
         st.session_state.img_before = None
         st.session_state.before_edges = 0
         st.session_state.ready = False
+        st.session_state["after"] = None
         st.rerun()
 
 # === HISTORY ===
@@ -125,7 +119,7 @@ st.subheader("📜 Action History")
 
 week_ago = datetime.now(tz=CO) - timedelta(days=7)
 this_week_count = db_collection.count_documents({"timestamp": {"$gte": week_ago}})
-st.markdown(f"<h3 style='color:lightgreen;'>✅ Sessions this week: {this_week_count}</h3>", unsafe_allow_html=True)
+st.markdown(f"**✅ Sessions this week: {this_week_count}**")
 
 records = list(db_collection.find().sort("timestamp", -1).limit(10))
 
@@ -151,12 +145,13 @@ else:
             st.image(base64_to_image(r["image_after"]), caption="AFTER", width=200)
             st.markdown(f"**Edges:** {r['edges_after']:,}")
 
-    col_prev, col_next = st.columns([1,1])
-    with col_prev:
-        if st.button("⬅️ Previous") and st.session_state.page > 0:
-            st.session_state.page -= 1
-            st.rerun()
-    with col_next:
-        if st.button("Next ➡️") and end < len(records):
-            st.session_state.page += 1
-            st.rerun()
+    col_prev, col_next = st.columns([1, 1])
+    prev_clicked = col_prev.button("⬅️ Previous")
+    next_clicked = col_next.button("Next ➡️")
+
+    if prev_clicked and st.session_state.page > 0:
+        st.session_state.page -= 1
+        st.rerun()
+    elif next_clicked and end < len(records):
+        st.session_state.page += 1
+        st.rerun()
