@@ -174,6 +174,8 @@ with tabs[0]:
                 with st.spinner("⏳ Registrando el resultado, por favor espera..."):
                     try:
                         st.info("⏳ Guardando resultado y sincronizando, no cierres la ventana...")
+                        # 1. Detener cronómetro: timestamp exacto
+                        end_time = datetime.now(timezone.utc)
                         if not st.session_state.session_id:
                             st.error("No hay sesión activa. No se puede guardar la imagen del después porque falta el session_id.")
                             st.stop()
@@ -181,7 +183,7 @@ with tabs[0]:
                         resized_after = resize_image(img_after)
                         img_b64_after = image_to_base64(resized_after)
                         edges_after = simple_edge_score(resized_after)
-                        # Guardar imagen después
+                        # 2. Guardar imagen después
                         result = collection.update_one(
                             {"_id": st.session_state.session_id},
                             {"$set": {
@@ -191,9 +193,8 @@ with tabs[0]:
                         )
                         if result.modified_count == 1:
                             improved = edges_after < st.session_state.before_edges * 0.9
-                            end_time = datetime.now(timezone.utc)
                             duration = int((end_time - st.session_state.start_time.replace(tzinfo=None)).total_seconds())
-                            # 1. Marcar la sesión como inactiva y guardar todo
+                            # 3. Marcar la sesión como inactiva y guardar todo
                             collection.update_one(
                                 {"_id": st.session_state.session_id},
                                 {"$set": {
@@ -203,7 +204,7 @@ with tabs[0]:
                                     "duration_seconds": duration,
                                 }}
                             )
-                            # 2. Actualizar el meta con el pellizco usando el MISMO end_time
+                            # 4. Actualizar el meta con el pellizco usando el MISMO end_time
                             meta.update_one(
                                 {},
                                 {"$set": {
@@ -215,23 +216,27 @@ with tabs[0]:
                                 }},
                                 upsert=True
                             )
-                            # 3. Limpiar estado local y refrescar
-                            st.session_state.start_time = None
-                            st.session_state.img_before = None
-                            st.session_state.before_edges = 0
-                            st.session_state.session_id = None
-                            st.session_state.ready = False
-                            st.session_state.img_after_uploaded = None
+                            # 5. Limpiar todo el estado local
+                            for key in [
+                                "start_time", "img_before", "before_edges", "session_id",
+                                "ready", "img_after_uploaded"
+                            ]:
+                                if key in st.session_state:
+                                    del st.session_state[key]
                             st.success("¡Sesión registrada exitosamente! 🎊")
                             st.balloons()
                             st.info("👌 Resultado sincronizado. Puedes ver el historial o iniciar una nueva sesión.")
                             st.rerun()
                         else:
-                            st.error("No se encontró la sesión activa en Mongo para actualizar. Verifica el session_id y que la sesión está iniciada correctamente.")
+                            st.error("ERROR: No se encontró la sesión activa en Mongo para actualizar. session_id usado: " +
+                                     f"{st.session_state.session_id}")
+                            st.stop()
                     except Exception as e:
                         import traceback
-                        st.error(f"Error al procesar o guardar la imagen: {e}")
-                        print(traceback.format_exc())
+                        st.exception(e)
+                        st.error("Error inesperado, revisa la consola/logs para detalles.")
+                        st.text(traceback.format_exc())
+                        st.stop()
         else:
             try:
                 st.image(base64_to_image(img_after_b64), caption="DESPUÉS (guardada)", width=320)
