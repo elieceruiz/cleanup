@@ -1,5 +1,6 @@
 streamlit
-pymongo
 pillow
-python-dateutil
+numpy
+pymongo
 pytz
+streamlit-autorefresh
