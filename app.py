@@ -1,20 +1,22 @@
 import streamlit as st
 import pymongo
+from datetime import datetime, timezone
 from PIL import Image
 import io, base64
-from datetime import datetime, timezone
 import pytz
 import time
 import getpass
 
-# === CONFIG ===
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="🧹 Visualizador de Limpieza", layout="centered")
 MONGO_URI = st.secrets["mongo_uri"]
 client = pymongo.MongoClient(MONGO_URI)
 db = client.cleanup
 collection = db.entries
+meta = db.meta
 CO = pytz.timezone("America/Bogota")
 
+# --- FUNCIONES AUXILIARES ---
 def resize_image(img, max_width=300):
     img = img.convert("RGB")
     w, h = img.size
@@ -59,26 +61,35 @@ def agrega_pellizco(session_id, user, mensaje):
         upsert=True
     )
 
-# --- Sincronización por sesión ---
+# --- FUNCIONES DE SINCRONIZACIÓN GLOBAL ---
+def actualiza_meta_global(user, mensaje):
+    meta.update_one(
+        {},
+        {"$set": {
+            "ultimo_pellizco_global": {
+                "user": user,
+                "datetime": datetime.now(timezone.utc),
+                "mensaje": mensaje
+            }
+        }},
+        upsert=True
+    )
+
+# --- BLOQUE DE SINCRONIZACIÓN GLOBAL (antes de cualquier UI/tabs) ---
+if "ultimo_pellizco_global" not in st.session_state:
+    st.session_state.ultimo_pellizco_global = None
+
+meta_doc = meta.find_one({}) or {}
+nuevo_pellizco = meta_doc.get("ultimo_pellizco_global", {})
+if nuevo_pellizco != st.session_state.ultimo_pellizco_global:
+    st.session_state.ultimo_pellizco_global = nuevo_pellizco
+    st.rerun()
+
+# --- SESSION STATE USUARIOS ---
 if "session_id" not in st.session_state:
     st.session_state.session_id = None
 if "ultimo_pellizco" not in st.session_state:
     st.session_state.ultimo_pellizco = None
-
-# Busca la sesión activa de este usuario (o la última)
-last = collection.find_one({"session_active": True}) or collection.find_one(sort=[("start_time", -1)])
-
-if last:
-    st.session_state.session_id = last["_id"]
-    meta_local = last.get("meta", {}).get("pellizcos", [])
-    ultimo_local = meta_local[-1] if meta_local else {}
-    if ultimo_local != st.session_state.ultimo_pellizco:
-        st.session_state.ultimo_pellizco = ultimo_local
-        st.rerun()
-else:
-    st.session_state.session_id = None
-    st.session_state.ultimo_pellizco = None
-
 if "user_login" not in st.session_state:
     st.session_state.user_login = getpass.getuser()
 
@@ -133,6 +144,7 @@ with tabs[0]:
                     }}
                 )
                 agrega_pellizco(session_id, st.session_state.user_login, "Sesión finalizada, esperando DESPUÉS")
+                actualiza_meta_global(st.session_state.user_login, "Sesión finalizada, esperando DESPUÉS")
                 st.success("¡Sesión finalizada! Ahora sube la foto del después cuando quieras.")
                 st.rerun()
                 break
@@ -161,6 +173,7 @@ with tabs[0]:
                         }}
                     )
                     agrega_pellizco(last["_id"], st.session_state.user_login, "Se subió el DESPUÉS")
+                    actualiza_meta_global(st.session_state.user_login, "Se subió el DESPUÉS")
                     st.success("¡Foto del después registrada exitosamente!")
                     st.rerun()
                 except Exception as e:
@@ -195,6 +208,7 @@ with tabs[0]:
                 }
             })
             agrega_pellizco(session.inserted_id, st.session_state.user_login, "Se subió el ANTES")
+            actualiza_meta_global(st.session_state.user_login, "Se subió el ANTES")
             st.success("¡Sesión iniciada! Cuando termines, detén el cronómetro.")
             st.rerun()
 
@@ -239,5 +253,6 @@ with tabs[1]:
         if st.button("🗑️ Borrar todo", use_container_width=True):
             now_utc = datetime.now(timezone.utc)
             collection.delete_many({})
+            actualiza_meta_global(st.session_state.user_login, "Se borraron todos los registros")
             st.success("Registros eliminados.")
             st.rerun()
