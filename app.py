@@ -5,7 +5,6 @@ import io, base64
 from datetime import datetime, timezone, timedelta
 import pytz
 import time
-from streamlit_autorefresh import st_autorefresh
 import getpass
 from bson import ObjectId
 
@@ -98,16 +97,21 @@ with tabs[0]:
     session_id = last["_id"]
     img_before = base64_to_image(last.get("image_base64", ""))
     before_edges = last.get("edges", 0)
-    start_time = last.get("start_time").astimezone(CO)
     st.success("Sesión activa. Cuando termines, detén el cronómetro.")
     st.image(img_before, caption="ANTES", width=320)
     st.markdown(f"**Saturación visual antes:** `{before_edges:,}`")
 
+    # --- Cronómetro en vivo (loop con consulta real a MongoDB) ---
     cronometro = st.empty()
-    stop_button = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
+    stop_button = st.empty()
+    stop_pressed = False
 
-    # Loop de cronómetro "real", consulta el estado en la base cada ciclo
+    # Botón de detener cronómetro
+    with stop_button:
+        stop_pressed = st.button("⏹️ Detener cronómetro / Finalizar sesión", type="primary", use_container_width=True)
+
     while True:
+        # Consulta el estado real en la base
         doc = collection.find_one({"_id": session_id})
         if not doc or not doc.get("session_active", False):
             st.success("¡Sesión finalizada desde otro dispositivo o ventana!")
@@ -117,9 +121,10 @@ with tabs[0]:
         elapsed = (datetime.now(CO) - start_time).total_seconds()
         cronometro.markdown(f"⏱️ <b>Tiempo activo:</b> <code>{format_seconds(int(elapsed))}</code>", unsafe_allow_html=True)
         time.sleep(1)
-        if stop_button:
+        # Si el botón fue presionado, cerrar la sesión
+        if stop_pressed:
             end_time = datetime.now(timezone.utc)
-            duration = int((end_time - doc["start_time"].replace(tzinfo=None)).total_seconds())
+            duration = int((end_time - doc["start_time"]).total_seconds())
             result = collection.update_one(
                 {"_id": doc["_id"], "session_active": True},
                 {"$set": {
