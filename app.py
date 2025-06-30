@@ -16,6 +16,16 @@ collection = db.entries
 meta = db.meta
 CO = pytz.timezone("America/Bogota")
 
+# --- Inicialización del documento meta (por si acaso) ---
+if meta.count_documents({}) == 0:
+    meta.insert_one({"ultimo_pellizco_global": {}})
+
+# --- Visualización para depuración ---
+with st.expander("🧪 Estado de la colección meta (solo pruebas)", expanded=True):
+    meta_doc_debug = meta.find_one({}) or {}
+    st.json(meta_doc_debug)
+    st.write("session_state.ultimo_pellizco_global:", st.session_state.get("ultimo_pellizco_global", None))
+
 # --- FUNCIONES AUXILIARES ---
 def resize_image(img, max_width=300):
     img = img.convert("RGB")
